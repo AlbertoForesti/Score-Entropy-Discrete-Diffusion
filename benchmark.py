@@ -9,10 +9,11 @@ import torch.multiprocessing as mp
 from hydra.core.hydra_config import HydraConfig
 from hydra.types import RunMode
 from omegaconf import OmegaConf, open_dict
+from copy import deepcopy
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
-@hydra.main(version_base=None, config_path="configs", config_name="config")
+@hydra.main(version_base=None, config_path="configs", config_name="benchmark")
 def main(cfg):
     ngpus = cfg.ngpus
     if "load_dir" in cfg:
@@ -40,12 +41,19 @@ def main(cfg):
     hydra_cfg = HydraConfig.get()
     if hydra_cfg.mode != RunMode.RUN:
         logger.info(f"Run id: {hydra_cfg.job.id}")
-
-    try:
-        mp.set_start_method("forkserver")
-        mp.spawn(run_train.run_multiprocess, args=(1, cfg, port), nprocs=1, join=True)
-    except Exception as e:
-        logger.critical(e, exc_info=True)
+    
+    if cfg.data.train == "bernoulli":
+        params = cfg.data.params.p
+    
+    mp.set_start_method("forkserver")
+    for param in params:
+        train_cfg = deepcopy(cfg)
+        train_cfg.data.params.p = param
+        train_cfg.work_dir = os.path.join(work_dir, f"param_{param}")
+        try:
+            mp.spawn(run_train.run_multiprocess, args=(1, train_cfg, port), nprocs=1, join=True)
+        except Exception as e:
+            logger.critical(e, exc_info=True)
 
 
 if __name__ == "__main__":

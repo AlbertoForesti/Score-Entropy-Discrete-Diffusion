@@ -9,10 +9,23 @@ import urllib.request
 import zipfile
 import requests
 import json
+import os
 from datasets import Dataset
+
+from mutinfo.distributions.base import UniformlyQuantized
+from scipy.stats import norm  # Used as a base distribution (to be quantized), you can use any other having a `cdf` method.
+from scipy.stats import bernoulli, poisson, multinomial
+from minde.libs.distribution_generator import EvolutionTask
+from scipy.stats import rv_discrete
+
+import numpy as np
+import os
 
 from torch.utils.data import DataLoader, DistributedSampler
 
+conda_env_path = os.environ.get('CONDA_PREFIX', '/default/path/if/not/found')
+hf_cache_dir = os.path.join(conda_env_path, 'hf_cache')
+os.environ['HF_HOME'] = hf_cache_dir
 
 def cycle_loader(dataloader, sampler=None):
     while 1:
@@ -116,7 +129,43 @@ def get_lambada_test_dataset():
     return dataset
 
 
-def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8):
+def get_bernoulli_dataset(p, mut_info=None):
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    n_samples = 10000
+
+    # random_variable = UniformlyQuantized(mutual_information, norm(loc=0.0, scale=1.0))
+    # random_variable = UniformlyQuantized(mutual_information, bernoulli(0.5))
+    # random_variable = UniformlyQuantized(mutual_information, poisson(4.0))
+
+    if mut_info is not None:
+        task = EvolutionTask(mut_info, dim_x=2, dim_y=2, mu=200, population_size=1000, scale=1.0, strategy="comma")
+        task.train(n_generations=300, temperature=0.5)
+        dist = task.best_agent.distribution # Numpy array
+        pmf = dist.flatten()
+        values = np.arange(len(pmf))
+        custom_rv = rv_discrete(name='joint_bernoulli', values=(values, pmf))
+        sample = custom_rv.rvs(size=n_samples)
+        X = np.unravel_index(sample, dist.shape)
+        X = np.stack(X, axis=1)
+        print("Data ", X)
+    else:
+        X = bernoulli.rvs(p=p, size=n_samples)
+        X = X.reshape(-1, 1)
+
+    print("Data ", X)
+
+    # Convert the NumPy array to a dictionary
+    data_dict = {"feature": X}
+
+    # Create the Hugging Face dataset
+    dataset = Dataset.from_dict(data_dict)
+    return dataset
+
+
+def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8, data_config=None, **kwargs):
     if name == "wikitext103":
         dataset = load_dataset("wikitext", name="wikitext-103-raw-v1", cache_dir=cache_dir)
     elif name == "wikitext2":
@@ -125,13 +174,23 @@ def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8):
         dataset = load_dataset("ptb_text_only", cache_dir=cache_dir)
     elif name == "lambada":
         dataset = get_lambada_test_dataset()
+    elif "bernoulli" in name:
+        p = data_config.params.p
+        dataset = get_bernoulli_dataset(p, data_config.mutinfo)
     else:
-        dataset = load_dataset(name, cache_dir=cache_dir)
+        dataset = load_dataset(name, cache_dir=cache_dir, trust_remote_code=True)
 
     if name == "lambada":
         data = dataset
+    elif name == "bernoulli":
+        data = dataset
     else:
         data = dataset[mode]
+    
+    if name == "bernoulli":
+        dataset = dataset.with_format('torch')
+        return dataset
+
 
     if name.startswith("wikitext"):
         detokenizer = wt_detokenizer
@@ -143,6 +202,7 @@ def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8):
         detokenizer = lambada_detokenizer
     else:
         detokenizer = None
+    
 
     def _apply_detokenizer(detokenizer):
         def detok(text):
@@ -206,8 +266,8 @@ def get_dataloaders(config, distributed=True):
         raise ValueError(f"Eval Batch Size for {config.eval.batch_size} is not divisible by {config.ngpus} gpus with accumulation {config.training.accum}.")
 
 
-    train_set = get_dataset(config.data.train, "train", cache_dir=config.data.cache_dir, block_size=config.model.length)
-    valid_set = get_dataset(config.data.valid, "validation" if config.data.valid != "text8" else "test", cache_dir=config.data.cache_dir, block_size=config.model.length)
+    train_set = get_dataset(config.data.train, "train", cache_dir=config.data.cache_dir, block_size=config.model.length, data_config=config.data)
+    valid_set = get_dataset(config.data.valid, "validation" if config.data.valid != "text8" else "test", cache_dir=config.data.cache_dir, block_size=config.model.length, data_config=config.data)
 
     if distributed:
         train_sampler = DistributedSampler(train_set) 

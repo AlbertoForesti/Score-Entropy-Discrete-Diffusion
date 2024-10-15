@@ -8,8 +8,8 @@ tokens: 2
 paths: 100
 x_indices: [0]
 y_indices: [1]
-estimate_entropy: False
-estimate_mutinfo: True
+estimate_entropy: True
+estimate_mutinfo: False
 
 training:
   batch_size: 512
@@ -27,9 +27,8 @@ data:
   train: bernoulli
   valid: bernoulli
   params:
-    p: 0.5
+    p: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
   cache_dir: data
-  mutinfo: 0.4
 
 graph:
   type: uniform

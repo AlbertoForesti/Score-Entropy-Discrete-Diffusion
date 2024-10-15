@@ -111,7 +111,7 @@ dependencies:
     - multiprocess==0.70.16
     - networkx==3.2.1
     - ninja==1.11.1.1
-    - numpy==1.24.1
+    - numpy<2
     - omegaconf==2.3.0
     - packaging==23.2
     - pandas==2.2.1
@@ -149,4 +149,5 @@ dependencies:
     - wandb==0.16.3
     - xxhash==3.4.1
     - yarl==1.9.4
+    - git+https://github.com/AlbertoForesti/minde.git
 prefix: /home/aaron/anaconda3/envs/sedd

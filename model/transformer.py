@@ -141,6 +141,8 @@ class DDiTBlock(nn.Module):
         self.adaLN_modulation.weight.data.zero_()
         self.adaLN_modulation.bias.data.zero_()
 
+        self.multi_head_attn = nn.MultiheadAttention(64, 2, dropout=dropout)
+
 
     def _get_bias_dropout_scale(self):
         return (
@@ -177,8 +179,18 @@ class DDiTBlock(nn.Module):
             )
         else:
             cu_seqlens = seqlens.cumsum(-1)
-        x = flash_attn_varlen_qkvpacked_func(
-            qkv, cu_seqlens, seq_len, 0., causal=False)
+        
+        q = qkv[:,0,:,:]
+        k = qkv[:,1,:,:]
+        v = qkv[:,2,:,:]
+
+        try:
+            x = self.multi_head_attn(q, k, v)[0]
+        except:
+            raise ValueError("Shapes: q={}, k={}, v={}".format(q.shape, k.shape, v.shape))
+        
+        """x = flash_attn_varlen_qkvpacked_func(
+            qkv, cu_seqlens, seq_len, 0., causal=False)"""
         
         x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
 
@@ -264,7 +276,7 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
 
         rotary_cos_sin = self.rotary_emb(x)
 
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+        with torch.cuda.amp.autocast(dtype=torch.float16):
             for i in range(len(self.blocks)):
                 x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
 
@@ -275,7 +287,12 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
             assert self.absorb, "Haven't configured this to work."
             esigm1_log = torch.where(sigma < 0.5, torch.expm1(sigma), sigma.exp() - 1).log().to(x.dtype)[:, None, None]
             x = x - esigm1_log - np.log(x.shape[-1] - 1)# this will be approximately averaged at 0
-            
+        
+        # print("Shape before scatter operation: ", x.shape)
+
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
+
+        # print("Output shape of model: ", x.shape)
+        # print("Shape of indices: ", indices.shape)
 
         return x

@@ -16,6 +16,7 @@ import sampling
 import graph_lib
 import noise_lib
 import utils
+import json
 from model import SEDD
 from model.ema import ExponentialMovingAverage
 from transformers import GPT2TokenizerFast, GPT2LMHeadModel
@@ -70,6 +71,7 @@ def _run(rank, world_size, cfg):
     mprint(work_dir)
     mprint(cfg)
     device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
+    results = {}
     if device.type == "cuda":
         mprint("Found {} CUDA devices.".format(torch.cuda.device_count()))
         for i in range(torch.cuda.device_count()):
@@ -137,6 +139,8 @@ def _run(rank, world_size, cfg):
     if cfg.training.snapshot_sampling:
         sampling_shape = (cfg.training.batch_size // (cfg.ngpus * cfg.training.accum), cfg.model.length)
         sampling_fn = sampling.get_sampling_fn(cfg, graph, noise, sampling_shape, sampling_eps, device)
+        entropy_estimate_fn = sampling.get_entropy_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device)
+        mutinfo_estimate_fn = sampling.get_mutinfo_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, cfg.x_indices, cfg.y_indices, device)
 
     num_train_steps = cfg.training.n_iters
     mprint(f"Starting training loop at step {initial_step}.")
@@ -146,10 +150,13 @@ def _run(rank, world_size, cfg):
         step = state['step']
 
 
-        if cfg.data.train != "text8":
+        if cfg.data.train != "text8" and cfg.data.train != "bernoulli":
             batch = next(train_iter)['input_ids'].to(device)
         else:
-            batch = next(train_iter).to(device)
+            if cfg.data.train == "bernoulli":
+                batch = next(train_iter)["feature"].to(device)
+            else:
+                batch = next(train_iter).to(device)
         loss = train_step_fn(state, batch)
 
         # flag to see if there was movement ie a full batch got computed
@@ -164,10 +171,13 @@ def _run(rank, world_size, cfg):
                 utils.save_checkpoint(checkpoint_meta_dir, state)
 
             if step % cfg.training.eval_freq == 0:
-                if cfg.data.valid != "text8":
+                if cfg.data.valid != "text8" and cfg.data.valid != "bernoulli":
                     eval_batch = next(eval_iter)['input_ids'].to(device)
                 else:
-                    eval_batch = next(train_iter).to(device)
+                    if cfg.data.train == "bernoulli":
+                        eval_batch = next(train_iter)["feature"].to(device)
+                    else:
+                        eval_batch = next(train_iter).to(device)
                 eval_loss = eval_step_fn(state, eval_batch)
 
                 dist.all_reduce(eval_loss)
@@ -184,40 +194,27 @@ def _run(rank, world_size, cfg):
 
                 # Generate and save samples
                 if cfg.training.snapshot_sampling:
-                    mprint(f"Generating text at step: {step}")
+                    mprint(f"Eval at step: {step}")
 
                     this_sample_dir = os.path.join(sample_dir, "iter_{}".format(step))
                     utils.makedirs(this_sample_dir)
 
                     ema.store(score_model.parameters())
                     ema.copy_to(score_model.parameters())
-                    sample = sampling_fn(score_model)
+                    if cfg.estimate_entropy:
+                        entropy_estimate = entropy_estimate_fn(score_model)
+                    if cfg.estimate_mutinfo:
+                        mutinfo_estimate = mutinfo_estimate_fn(score_model)
                     ema.restore(score_model.parameters())
 
-                    sentences = tokenizer.batch_decode(sample)
-                    
-                    file_name = os.path.join(this_sample_dir, f"sample_{rank}.txt")
-                    with open(file_name, 'w') as file:
-                        for sentence in sentences:
-                            file.write(sentence + "\n")
-                            file.write("============================================================================================\n")
-
-                    if cfg.eval.perplexity:
-                        with torch.no_grad():
-                            eval_model = GPT2LMHeadModel.from_pretrained("gpt2-large").to(device).eval()
-                            batches = sample.shape[0] // cfg.eval.perplexity_batch_size
-                            total_perplexity = 0
-                            for i in range(batches):
-                                s = sample[i * cfg.eval.perplexity_batch_size:(i + 1) * cfg.eval.perplexity_batch_size]
-                                loss, logits = eval_model(s, labels=s)[:2]
-                                logits = logits.transpose(-1, -2)
-                                perplexity = F.cross_entropy(logits[..., :-1], s[..., 1:], reduction="none").mean(dim=-1).exp().mean()
-                                total_perplexity += perplexity
-                            total_perplexity /= batches
-                            dist.all_reduce(total_perplexity)
-                            total_perplexity /= world_size
-                            mprint(f"Generative Perplexity at step: {step}. Perplexity: {total_perplexity:.3f}.")
-
-                            del eval_model, logits, loss
+                    if cfg.estimate_entropy:
+                        mprint(f"Entropy estimated: {entropy_estimate.item()}")
+                        results["entropy_estimate"] = entropy_estimate.item()
+                    if cfg.estimate_mutinfo:
+                        mprint(f"Mutual Information estimated: {mutinfo_estimate.item()}")
+                        results["mutinfo_estimate"] = mutinfo_estimate.item()
 
                     dist.barrier()
+    
+    json.dump(results, open(os.path.join(work_dir, "results.json"), "w"))
+

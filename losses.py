@@ -20,15 +20,22 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False):
                 t = (1 - sampling_eps) * torch.rand(batch.shape[0], device=batch.device) + sampling_eps
             
         sigma, dsigma = noise(t)
+        # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
         
         if perturbed_batch is None:
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
-
+        
         log_score_fn = mutils.get_score_fn(model, train=train, sampling=False)
         log_score = log_score_fn(perturbed_batch, sigma)
+        if np.random.rand() < 1e-2:
+            print(f"Score example: {log_score[0].exp()}, t: {t[0]}")
         loss = graph.score_entropy(log_score, sigma[:, None], perturbed_batch, batch)
 
+        # print(f"Loss shape before dsigma stuff {loss.shape}")
+
         loss = (dsigma[:, None] * loss).sum(dim=-1)
+
+        # print(f"Loss shape after dsigma stuff {loss.shape}")
 
         return loss
 
