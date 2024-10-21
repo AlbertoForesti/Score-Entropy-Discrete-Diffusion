@@ -1,6 +1,7 @@
 defaults:
   - _self_
   - model: nano
+  - data: bernoulli
   - override hydra/launcher: submitit_slurm
 
 ngpus: 1
@@ -10,26 +11,20 @@ x_indices: [0]
 y_indices: [1]
 estimate_entropy: False
 estimate_mutinfo: True
+mc_times: 100
+sampling_eps: 1e-2
 
 training:
   batch_size: 512
   accum: 1
   n_iters: 25001
-  snapshot_freq: 5000
+  snapshot_freq: 1
   log_freq: 50
   eval_freq: 100
   snapshot_freq_for_preemption: 10000
   weight: standard
   snapshot_sampling: True
   ema: 0.9999
-
-data:
-  train: bernoulli
-  valid: bernoulli
-  params:
-    p: 0.5
-  cache_dir: data
-  mutinfo: 0.4
 
 graph:
   type: uniform
@@ -47,9 +42,9 @@ sampling:
   noise_removal: True
 
 eval:
-  batch_size: 2
+  batch_size: 512
   perplexity: True
-  perplexity_batch_size: 2
+  perplexity_batch_size: 32
 
 optim:
   weight_decay: 0

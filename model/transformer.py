@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import math
+import math as math
+import time
 
 from einops import rearrange
 from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
@@ -79,6 +80,7 @@ class TimestepEmbedder(nn.Module):
         """
         # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         half = dim // 2
+        # raise UserWarning(f"tmp shape is {tmp.shape}, t shape is {t.shape}, tmp device is {tmp.device}, t device is {t.device}")
         freqs = torch.exp(
             -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
         ).to(device=t.device)
@@ -103,7 +105,7 @@ class LabelEmbedder(nn.Module):
         self.embedding_table = nn.Embedding(num_classes + 1, cond_size)
         self.num_classes = num_classes
 
-        # TODO think of initializing with 0.02 std deviation like in original DiT paper
+        # TODO think of initializing with 0.02 std deviation like in original smiaottolo DiT paper
 
     def forward(self, labels):
         embeddings = self.embedding_table(labels)
@@ -111,7 +113,7 @@ class LabelEmbedder(nn.Module):
     
 
 #################################################################################
-#                                 Core Model                                    #
+#                                 Core Pasta                                   #
 #################################################################################
 
 

@@ -30,6 +30,10 @@ class Graph(abc.ABC):
     def dim(self):
         pass
 
+    @dim.setter
+    def dim(self, value):
+        pass
+
     @property
     def absorb(self):
         """
@@ -123,6 +127,10 @@ class Uniform(Graph):
     @property
     def dim(self):
         return self._dim
+    
+    @dim.setter
+    def dim(self, value):
+        self._dim = value
     
     @property
     def absorb(self):

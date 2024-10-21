@@ -12,11 +12,9 @@ import json
 import os
 from datasets import Dataset
 
-from mutinfo.distributions.base import UniformlyQuantized
 from scipy.stats import norm  # Used as a base distribution (to be quantized), you can use any other having a `cdf` method.
-from scipy.stats import bernoulli, poisson, multinomial
-from minde.libs.distribution_generator import EvolutionTask
-from scipy.stats import rv_discrete
+from scipy.stats import bernoulli, binom
+from distribution_generator.distributions import get_rv
 
 import numpy as np
 import os
@@ -128,8 +126,22 @@ def get_lambada_test_dataset():
     dataset = Dataset.from_list(lambada_data)
     return dataset
 
+def get_binomial_dataset(data_config):
 
-def get_bernoulli_dataset(p, mut_info=None):
+    if data_config.mut_info is not None:
+        raise NotImplementedError("Binomial distribution not implemented for mutual information")
+    else:
+        X = binom.rvs(n=data_config.params.n, p=data_config.params.p, size=data_config.n_samples)
+        X = X.reshape(-1, 1)
+    # Convert the NumPy array to a dictionary
+    data_dict = {"feature": X}
+
+    # Create the Hugging Face dataset
+    dataset = Dataset.from_dict(data_dict)
+    return dataset
+
+
+def get_bernoulli_dataset(data_config):
 
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -140,19 +152,13 @@ def get_bernoulli_dataset(p, mut_info=None):
     # random_variable = UniformlyQuantized(mutual_information, bernoulli(0.5))
     # random_variable = UniformlyQuantized(mutual_information, poisson(4.0))
 
-    if mut_info is not None:
-        task = EvolutionTask(mut_info, dim_x=2, dim_y=2, mu=200, population_size=1000, scale=1.0, strategy="comma")
-        task.train(n_generations=300, temperature=0.5)
-        dist = task.best_agent.distribution # Numpy array
-        pmf = dist.flatten()
-        values = np.arange(len(pmf))
-        custom_rv = rv_discrete(name='joint_bernoulli', values=(values, pmf))
-        sample = custom_rv.rvs(size=n_samples)
-        X = np.unravel_index(sample, dist.shape)
-        X = np.stack(X, axis=1)
+    if data_config.mut_info is not None:
+        rv = get_rv(data_config.mut_info,2,2, min_val=data_config.min_val)
+        print("Joint distribution ", rv.joint_dist)
+        X = rv.rvs(size=n_samples)
         print("Data ", X)
     else:
-        X = bernoulli.rvs(p=p, size=n_samples)
+        X = bernoulli.rvs(p=data_config.params.p, size=n_samples)
         X = X.reshape(-1, 1)
 
     print("Data ", X)
@@ -175,22 +181,22 @@ def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8, data_co
     elif name == "lambada":
         dataset = get_lambada_test_dataset()
     elif "bernoulli" in name:
-        p = data_config.params.p
-        dataset = get_bernoulli_dataset(p, data_config.mutinfo)
+        dataset = get_bernoulli_dataset(data_config)
+    elif "binomial" in name:
+        dataset = get_binomial_dataset(data_config)
     else:
         dataset = load_dataset(name, cache_dir=cache_dir, trust_remote_code=True)
 
     if name == "lambada":
         data = dataset
-    elif name == "bernoulli":
+    elif name == "bernoulli" or name=="binomial":
         data = dataset
     else:
         data = dataset[mode]
     
-    if name == "bernoulli":
+    if name == "bernoulli" or name=="binomial":
         dataset = dataset.with_format('torch')
         return dataset
-
 
     if name.startswith("wikitext"):
         detokenizer = wt_detokenizer

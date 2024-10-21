@@ -49,6 +49,10 @@ def run_multiprocess(rank, world_size, cfg, port):
 
 
 def _run(rank, world_size, cfg):
+
+    if cfg.data.mut_info is not None and cfg.model.length != 2:
+        raise ValueError("Mutual information can only be computed for length 2 sequences. Instead got length: {}".format(cfg.model.length))
+
     torch.cuda.set_device(rank)
     work_dir = cfg.work_dir
 
@@ -150,13 +154,15 @@ def _run(rank, world_size, cfg):
         step = state['step']
 
 
-        if cfg.data.train != "text8" and cfg.data.train != "bernoulli":
+        if cfg.data.train != "text8" and cfg.data.train != "bernoulli" and cfg.data.train != "binomial":
             batch = next(train_iter)['input_ids'].to(device)
         else:
-            if cfg.data.train == "bernoulli":
+            if cfg.data.train == "bernoulli" or cfg.data.train == "binomial":
                 batch = next(train_iter)["feature"].to(device)
             else:
                 batch = next(train_iter).to(device)
+        # raise UserWarning(f"Batch shape: {batch.shape}")
+        # Batch shape is (batch_size, seq_len)
         loss = train_step_fn(state, batch)
 
         # flag to see if there was movement ie a full batch got computed
@@ -171,10 +177,10 @@ def _run(rank, world_size, cfg):
                 utils.save_checkpoint(checkpoint_meta_dir, state)
 
             if step % cfg.training.eval_freq == 0:
-                if cfg.data.valid != "text8" and cfg.data.valid != "bernoulli":
+                if cfg.data.valid != "text8" and cfg.data.valid != "bernoulli" and cfg.data.valid != "binomial":
                     eval_batch = next(eval_iter)['input_ids'].to(device)
                 else:
-                    if cfg.data.train == "bernoulli":
+                    if cfg.data.train == "bernoulli" or cfg.data.train == "binomial":
                         eval_batch = next(train_iter)["feature"].to(device)
                     else:
                         eval_batch = next(train_iter).to(device)
@@ -204,7 +210,7 @@ def _run(rank, world_size, cfg):
                     if cfg.estimate_entropy:
                         entropy_estimate = entropy_estimate_fn(score_model)
                     if cfg.estimate_mutinfo:
-                        mutinfo_estimate = mutinfo_estimate_fn(score_model)
+                        mutinfo_estimate = mutinfo_estimate_fn(score_model, train_ds)
                     ema.restore(score_model.parameters())
 
                     if cfg.estimate_entropy:
