@@ -7,3 +7,4 @@ n_blocks: 2      # Fewer blocks due to simpler data
 n_heads: 1       # Only one head since the data is very simple
 scale_by_sigma: False
 dropout: 0.1     # Keeping dropout the same
+minde_training: True

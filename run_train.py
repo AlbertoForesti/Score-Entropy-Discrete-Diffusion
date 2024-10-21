@@ -163,6 +163,14 @@ def _run(rank, world_size, cfg):
                 batch = next(train_iter).to(device)
         # raise UserWarning(f"Batch shape: {batch.shape}")
         # Batch shape is (batch_size, seq_len)
+        if cfg.model.minde_training:
+            # randomly shuffle the batch for just one feature
+            shuffled = 0
+            if np.random.rand() < 0.5:
+                batch[:,0] = batch[torch.randperm(batch.size(0)),0]
+                shuffled = 1
+            batch = torch.cat((batch, shuffled*torch.ones(batch.size(0),1,dtype=torch.int64).to(device)), dim=1)
+                
         loss = train_step_fn(state, batch)
 
         # flag to see if there was movement ie a full batch got computed
