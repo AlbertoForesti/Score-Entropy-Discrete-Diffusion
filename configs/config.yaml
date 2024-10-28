@@ -1,18 +1,23 @@
 defaults:
   - _self_
-  - model: nano
-  - data: bernoulli
+  - model: nano_d2
+  - data: bernoulli_mutinfo
   - override hydra/launcher: submitit_slurm
 
 ngpus: 1
-tokens: 2
-paths: 100
+tokens: ${data.alphabet_size}
+paths: 128
 x_indices: [0]
 y_indices: [1]
-estimate_entropy: False
-estimate_mutinfo: True
+estimate_entropy: True
+estimate_mutinfo: False
 mc_times: 100
 sampling_eps: 1e-2
+montecarlo: False
+
+cond: 
+  input_ids: [0]
+  input_locs: [0]
 
 training:
   batch_size: 512

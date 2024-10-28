@@ -140,6 +140,19 @@ def get_binomial_dataset(data_config):
     dataset = Dataset.from_dict(data_dict)
     return dataset
 
+def get_distribution(data_config):
+    if "binomial" in data_config.train:
+        p = data_config.params.p
+        n = data_config.params.n
+        dist = binom.pmf(np.arange(n), n, p).reshape(1,-1,1)
+        return dist
+    if hasattr(data_config, "mut_info") and data_config.mut_info is not None:
+        rv = get_rv(data_config.mut_info,2,2, min_val=data_config.min_val)
+        return rv.joint_dist.reshape(2,-1,1)
+    else:
+        print(data_config)
+        p=data_config.params.p
+        return np.array([p,1-p]).reshape(1,-1,1)
 
 def get_bernoulli_dataset(data_config):
 

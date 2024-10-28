@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 from catsample import sample_categorical
 from functools import partial
+from scipy.linalg import expm
 
 from model import utils as mutils
 from tqdm import tqdm
@@ -76,11 +77,20 @@ class EulerPredictor(Predictor):
         sigma, dsigma = self.noise(t)
         score = score_fn(x, sigma)
 
+        if indeces_to_keep is not None:
+            step_size /= len(indeces_to_keep)
+            # print("Step size is ", step_size)
+        else:
+            step_size /= x.shape[1]
+
         rev_rate = step_size * dsigma[..., None] * self.graph.reverse_rate(x, score)
         new_x = self.graph.sample_rate(x, rev_rate)
         new_x = proj_fn(new_x)
 
         probs = F.one_hot(x, num_classes=self.graph.dim).to(rev_rate) + rev_rate
+
+        # print(f"probs examples: {probs[:5]}")
+        # print(f"probs conditional examples: {probs[:, indeces_to_keep][:5]}")
 
         # Score shape is (batch_size, seq_len, vocab_size)
         # x shape is (batch_size, seq_len)
@@ -93,15 +103,25 @@ class EulerPredictor(Predictor):
         probs_uniform = F.one_hot(x, num_classes=self.graph.dim).to(rev_rate_uniform) + rev_rate_uniform
 
         num = torch.gather(probs, -1, new_x[...,None])
+
+        # indeces_to_keep = torch.randint(0, self.graph.dim, (1,))
+
         if indeces_to_keep is not None:
             num = num[:, indeces_to_keep]
-        num_seq = torch.prod(num, dim=1, keepdim=True)
+            # print("Indices to keep: ", indeces_to_keep)
+        # num_seq = torch.prod(num, dim=1, keepdim=True)
         den = torch.gather(probs_uniform, -1, new_x[...,None])
         if indeces_to_keep is not None:
             den = den[:, indeces_to_keep]
-        den_seq = torch.prod(den, dim=1, keepdim=True)
+            # print("Indices to keep: ", indeces_to_keep)
 
-        ratio = num_seq/den_seq # Shape (bs,1,1)
+        # den_seq = torch.prod(den, dim=1, keepdim=True)
+
+        ratio = num/den # Shape (bs,1,1)
+        # ratio = num
+        # print("Ratio shape: ", ratio.shape)
+        ratio = ratio.prod(dim=1, keepdim=True)
+        # print("Ratio shape after sum: ", ratio.shape)
         return ratio
 
 @register_predictor(name="none")
@@ -190,7 +210,7 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
     
     return sampling_fn
 
-def get_entropy_estimate_fn(config, graph, noise, batch_dims, eps, device):
+def get_entropy_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
     
     sampling_fn = get_pc_sampler_for_entropy_estimate(graph=graph,
                                                       noise=noise,
@@ -200,7 +220,10 @@ def get_entropy_estimate_fn(config, graph, noise, batch_dims, eps, device):
                                                       denoise=config.sampling.noise_removal,
                                                       vocab_size=config.tokens,
                                                       eps=eps,
-                                                      device=device)
+                                                      device=device,
+                                                      proj_fun=proj_fun,
+                                                      p=p,
+                                                      indeces_to_keep=indeces_to_keep)
     
     def estimate_entropy_fn(model):
         estimates = []
@@ -208,10 +231,62 @@ def get_entropy_estimate_fn(config, graph, noise, batch_dims, eps, device):
             kl = sampling_fn(model)
             estimates.append(kl)
         # print("Estimates: ", estimates)
-        print("Mean estimate: ", np.log(config.tokens*batch_dims[1])-np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates))
-        return np.log(config.tokens*batch_dims[1])-np.mean(estimates)
+        factor = batch_dims[1] if indeces_to_keep is None else len(indeces_to_keep)
+        print("Mean estimate: ", np.log(config.tokens*factor)-np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates))
+        return np.log(config.tokens*factor)-np.mean(estimates)
     
     return estimate_entropy_fn
+
+def get_entropy_montecarlo_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None):
+        
+        def estimate_entropy_fn(model, eval_loader):
+            predictor = get_predictor(config.sampling.predictor)(graph, noise)
+            if p is None:
+                score_fn = mutils.get_score_fn(model, train=False, sampling=True)
+            else:
+                print("Using analytic score")
+                score_fn = lambda x, sigma: graph.get_analytic_score(x, p, sigma)
+
+            n = int(1/eps)
+
+            index_hist = torch.zeros(n, device=device)
+            
+            with torch.no_grad():
+                step = 0
+                estimates = []
+                for batch in tqdm(eval_loader, desc="Estimating Entropy", total=config.paths):
+                    if step==config.paths:
+                        break
+                    if config.data.valid != "text8" and config.data.valid != "bernoulli":
+                        batch = batch['input_ids'].to(device)
+                    else:
+                        if config.data.valid == "bernoulli":
+                            batch = batch["feature"].to(device)
+                        else:
+                            batch = batch.to(device)
+                    time_indeces = torch.randint(1, n+1, (batch.shape[0],), device=device)
+                    counts = torch.bincount(time_indeces, minlength=n+1)
+                    # unique_indeces_number = torch.unique(time_indeces).shape[0]
+                    # print(f"n: {n}, Counts shape: {counts.shape}, index_hist shape: {index_hist.shape}, time indices max: {time_indeces.max()}, time indices min: {time_indeces.min()}, unique indeces number: {unique_indeces_number}")
+                    index_hist += counts[1:] # Because we don't have zeros
+                    t = time_indeces/n
+                    sigma, dsigma = noise(t)
+                    # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
+                    perturbed_batch = graph.sample_transition(batch, sigma[:, None])
+                    ratio = predictor.get_ratio_with_uniform(score_fn, perturbed_batch, t, eps)
+                    estimates.append(torch.log(ratio).mean().item())
+                    if step % 100 == 0:
+                        print(sigma[:5])
+                        print(t[:5])
+                        kl = n*np.mean(estimates)
+                        h = np.log(config.tokens*batch_dims[1]) - kl
+                        tqdm.write(f"Entropy estimate: {h}, kl: {kl}, kl unnormalised {np.mean(estimates)}")
+                    step += 1
+                print(f"Entropy estimate: {np.log(config.tokens*batch_dims[1])-n*np.mean(estimates)}")
+                print(f"Index probabilities: {index_hist/torch.sum(index_hist)}, with variance {torch.var(index_hist/torch.sum(index_hist))}")
+                return np.log(config.tokens*batch_dims[1])-n*np.mean(estimates)
+                    
+        return estimate_entropy_fn
 
 def get_mutinfo_estimate_fn(config, graph, noise, batch_dims, eps, x_indices, y_indices, device):
 
@@ -305,13 +380,17 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
     
     return pc_sampler
 
-def get_pc_sampler_for_entropy_estimate(graph, noise, batch_dims, predictor, steps, vocab_size, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, indeces_to_keep=None):
+
+def get_pc_sampler_for_entropy_estimate(graph, noise, batch_dims, predictor, steps, vocab_size, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, indeces_to_keep=None, p=None):
     predictor = get_predictor(predictor)(graph, noise)
     projector = proj_fun
 
     @torch.no_grad()
     def pc_sampler(model):
-        sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True)
+        if p is None:
+            sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True)
+        else:
+            sampling_score_fn = lambda x, sigma: graph.get_analytic_score(x, p, sigma)
         x = graph.sample_limit(*batch_dims).to(device)
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
@@ -320,7 +399,7 @@ def get_pc_sampler_for_entropy_estimate(graph, noise, batch_dims, predictor, ste
         for i in range(steps):
             t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
             x = projector(x)
-            ratio = predictor.get_ratio_with_uniform(sampling_score_fn, x, t, dt, indeces_to_keep=indeces_to_keep)
+            ratio = predictor.get_ratio_with_uniform(sampling_score_fn, x, t, dt, proj_fn=projector, indeces_to_keep=indeces_to_keep)
             # raise UserWarning(f"Shapes were {x.shape}, {t.shape}, {dt}, {ratio.shape}")
             # print("ratio is", ratio[:5]) are all around 2
             # print("log ratio is", torch.log(ratio)[:5])

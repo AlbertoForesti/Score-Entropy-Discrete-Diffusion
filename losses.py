@@ -24,7 +24,6 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False):
         
         if perturbed_batch is None:
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
-        
         log_score_fn = mutils.get_score_fn(model, train=train, sampling=False)
         log_score = log_score_fn(perturbed_batch, sigma)
         if np.random.rand() < 1e-2:

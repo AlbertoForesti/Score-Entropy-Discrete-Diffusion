@@ -128,6 +128,10 @@ def _run(rank, world_size, cfg):
 
     # Build data iterators
     train_ds, eval_ds = data.get_dataloaders(cfg)
+    p = data.get_distribution(cfg.data)
+
+    if isinstance(p, np.ndarray):
+        p = torch.tensor(p, device=device).float()
 
     # mprint(f"Length of datasets: {len(train_ds)}, {len(eval_ds)}")
 
@@ -139,11 +143,42 @@ def _run(rank, world_size, cfg):
     train_step_fn = losses.get_step_fn(noise, graph, True, optimize_fn, cfg.training.accum)
     eval_step_fn = losses.get_step_fn(noise, graph, False, optimize_fn, cfg.training.accum)
 
+    if cfg.cond is not None:
+        input_ids = torch.tensor(cfg.cond.input_ids, device=device).long()
+        input_locs = torch.tensor(cfg.cond.input_locs, device=device).long()
+        
+        def proj_fun(x):
+            x[:, input_locs] = input_ids
+            return x
+        
+        dim = input_ids.item()
+        index = input_locs
+        # Marginalize p(x) over the conditioned indices
+        print(f"p before: {p}")
+        print(f"Entropy of p before: {-(p * torch.log(p)).sum()}")
+
+        p_cond = torch.index_select(p, dim, index)
+        p_cond /= p_cond.sum()
+        print(f"p after conditioning: {p_cond}")
+        print(f"Entropy of p after conditioning: {-(p_cond * torch.log(p_cond)).sum()}")
+        indeces_to_discard = list(input_locs)
+        indeces_to_keep = [i for i in range(cfg.model.length) if i not in indeces_to_discard]
+        # indeces_to_keep = None
+        # p = p_cond.expand(*p.shape)
+        print(f"New p: {p}")
+    else:
+        proj_fun = lambda x: x
+        print(f"Joint p: {p}")
+        print(f"Entropy of p: {-(p * torch.log(p)).sum()}")
+        # p = p/p.sum(dim=1, keepdim=True)
+        print(f"Marginalized p: {p}")
+        indeces_to_keep = None
 
     if cfg.training.snapshot_sampling:
         sampling_shape = (cfg.training.batch_size // (cfg.ngpus * cfg.training.accum), cfg.model.length)
         sampling_fn = sampling.get_sampling_fn(cfg, graph, noise, sampling_shape, sampling_eps, device)
-        entropy_estimate_fn = sampling.get_entropy_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device)
+        entropy_estimate_fn = sampling.get_entropy_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
+        entropy_estimate_montecarlo_fn = sampling.get_entropy_montecarlo_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p)
         mutinfo_estimate_fn = sampling.get_mutinfo_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, cfg.x_indices, cfg.y_indices, device)
 
     num_train_steps = cfg.training.n_iters
@@ -163,6 +198,7 @@ def _run(rank, world_size, cfg):
                 batch = next(train_iter).to(device)
         # raise UserWarning(f"Batch shape: {batch.shape}")
         # Batch shape is (batch_size, seq_len)
+        print(f"Batch shape: {batch.shape}")
         loss = train_step_fn(state, batch)
 
         # flag to see if there was movement ie a full batch got computed
@@ -208,7 +244,10 @@ def _run(rank, world_size, cfg):
                     ema.store(score_model.parameters())
                     ema.copy_to(score_model.parameters())
                     if cfg.estimate_entropy:
-                        entropy_estimate = entropy_estimate_fn(score_model)
+                        if cfg.montecarlo:
+                            entropy_estimate = entropy_estimate_montecarlo_fn(score_model, train_ds)
+                        else:
+                            entropy_estimate = entropy_estimate_fn(score_model)
                     if cfg.estimate_mutinfo:
                         mutinfo_estimate = mutinfo_estimate_fn(score_model, train_ds)
                     ema.restore(score_model.parameters())

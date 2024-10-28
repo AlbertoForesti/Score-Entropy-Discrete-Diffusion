@@ -116,6 +116,32 @@ class Graph(abc.ABC):
         """
         pass
 
+    def get_pt(self, p, sigma):
+        """
+        Computes the diffused probability given sigma.
+        """
+        # p is of shape (tokens, dim, 1)
+        indeces = torch.arange(self.dim, device=p.device).unsqueeze(0).unsqueeze(0)
+        indeces = indeces.expand(sigma.shape[0],p.shape[0],-1)
+        # indeces = torch.arange(graph.dim).reshape(-1,1)
+        exp_qt = self.transition(indeces,sigma[...,None])
+        p = p.expand(sigma.shape[0],p.shape[0],-1,-1)
+        p_t = exp_qt@p
+        return p_t
+
+    def get_analytic_score(self, x, p, sigma):
+        """
+        Computes the score function given sigma.
+        """
+        assert len(p.shape) == 3, f"p must be of shape (tokens, dim, 1), instead got shape {p.shape}"
+        assert x.shape[1] == p.shape[0], f"p must match x for number of tokens, instead got x={x.shape} and p={p.shape}"
+        assert x.shape[0] == sigma.shape[0], "sigma must match x for batch size"
+        p_t = self.get_pt(p,sigma)
+        score_matrix = p_t.permute(0,1,3,2).expand(-1,-1,self.dim,-1)/p_t.expand(-1,-1,-1,self.dim)
+        index_tensor = x[...,None,None].expand(-1,-1,-1,self.dim)
+        score = torch.gather(score_matrix,2,index_tensor)
+        return score.squeeze(2)
+
 
 class Uniform(Graph):
     """
@@ -123,6 +149,10 @@ class Uniform(Graph):
     """
     def __init__(self, dim):
         self._dim = dim
+        Q = torch.ones((dim,dim))
+        for i in range(dim):    
+            Q[i,i] = 1-dim
+        self._Q = Q
 
     @property
     def dim(self):
@@ -135,6 +165,11 @@ class Uniform(Graph):
     @property
     def absorb(self):
         return False
+    
+    @property
+    def Q(self):
+        return self._Q
+
 
     def rate(self, i):
         edge = torch.ones(*i.shape, self.dim, device=i.device) / self.dim
