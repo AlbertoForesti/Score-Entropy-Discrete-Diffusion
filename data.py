@@ -144,7 +144,7 @@ def get_distribution(data_config):
     if "binomial" in data_config.train:
         p = data_config.params.p
         n = data_config.params.n
-        dist = binom.pmf(np.arange(n), n, p).reshape(1,-1,1)
+        dist = binom.pmf(np.arange(n+1), n, p).reshape(1,-1,1)
         return dist
     if hasattr(data_config, "mut_info") and data_config.mut_info is not None:
         rv = get_rv(data_config.mut_info,2,2, min_val=data_config.min_val)
@@ -152,7 +152,7 @@ def get_distribution(data_config):
     else:
         print(data_config)
         p=data_config.params.p
-        return np.array([p,1-p]).reshape(1,-1,1)
+        return bernoulli.pmf(np.arange(2), p).reshape(1,-1,1)
 
 def get_bernoulli_dataset(data_config):
 
