@@ -179,7 +179,9 @@ def _run(rank, world_size, cfg):
         sampling_fn = sampling.get_sampling_fn(cfg, graph, noise, sampling_shape, sampling_eps, device)
         entropy_estimate_fn = sampling.get_entropy_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
         entropy_estimate_montecarlo_fn = sampling.get_entropy_montecarlo_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p)
-        mutinfo_estimate_fn = sampling.get_mutinfo_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, cfg.x_indices, cfg.y_indices, device)
+        entropy_estimate_dynkin_fn = sampling.get_entropy_dynkin_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
+        mutinfo_estimate_fn = sampling.get_mutinfo_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
+        mutinfo_estimate_dynkin_fn = sampling.get_mutinfo_dynkin_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
 
     num_train_steps = cfg.training.n_iters
     mprint(f"Starting training loop at step {initial_step}.")
@@ -246,10 +248,18 @@ def _run(rank, world_size, cfg):
                     if cfg.estimate_entropy:
                         if cfg.montecarlo:
                             entropy_estimate = entropy_estimate_montecarlo_fn(score_model, train_ds)
+                        elif cfg.dynkin:
+                            entropy_estimate = entropy_estimate_dynkin_fn(score_model, train_ds)
                         else:
                             entropy_estimate = entropy_estimate_fn(score_model)
                     if cfg.estimate_mutinfo:
-                        mutinfo_estimate = mutinfo_estimate_fn(score_model, train_ds)
+                        
+                        if cfg.dynkin:
+                            mutinfo_estimate_dynkin = mutinfo_estimate_dynkin_fn(score_model, train_ds)
+                            print("Dynkin estimate: ", mutinfo_estimate_dynkin)
+                        else:
+                            mutinfo_estimate = mutinfo_estimate_fn(score_model)
+                            print("Mutual Information estimate: ", mutinfo_estimate)
                     ema.restore(score_model.parameters())
 
                     if cfg.estimate_entropy:

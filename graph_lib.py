@@ -141,6 +141,93 @@ class Graph(abc.ABC):
         index_tensor = x[...,None,None].expand(-1,-1,-1,self.dim)
         score = torch.gather(score_matrix,2,index_tensor)
         return score.squeeze(2)
+    
+    def score_divergence(self, score_p, score_q, dsigma, x):
+
+        # score expected s_theta(x)_y, NOT log s_theta(x)_y
+
+        print(f"Shapes: score_p: {score_p.shape}, score_q: {score_q.shape}, dsigma: {dsigma.shape}, x: {x.shape}")
+
+        print(f"score_p examples: {score_p[:5]}")
+        print(f"score_q examples: {score_q[:5]}")
+        print(f"dsigma examples: {dsigma[:5]}")
+        print(f"x examples: {x[:5]}")
+
+        x = x.unsqueeze(-1)
+        
+        log_score_p = torch.scatter(score_p.log(), -1, x, torch.zeros_like(score_p))
+        score_p = torch.scatter(score_p, -1, x, torch.zeros_like(score_p))
+
+        log_score_q = torch.scatter(score_q.log(), -1, x, torch.zeros_like(score_q))
+        score_q = torch.scatter(score_q, -1, x, torch.zeros_like(score_q))
+
+        print(f"Shapes after scatter: score_p: {score_p.shape}, score_q: {score_q.shape}, x: {x.shape}, log_score_p: {log_score_p.shape}, log_score_q: {log_score_q.shape}")
+        
+        neg_term = log_score_q * score_p
+
+        # constant factor
+        const = score_p * (log_score_p - 1)
+
+        #positive term
+        pos_term = torch.scatter(score_q, -1, x, torch.zeros_like(score_q))
+
+        print(f"pos term examples: {pos_term[:5]}")
+        print(f"neg term examples: {neg_term[:5]}")
+        print(f"const examples: {const[:5]}")
+
+        unscaled_ret_value = pos_term - neg_term + const
+        print(f"Unscaled ret value examples: {unscaled_ret_value[:5]}")
+
+        print(f"Shapes: unscaled_ret_value: {unscaled_ret_value.shape}, pos_term: {pos_term.shape}, neg_term: {neg_term.shape}, const: {const.shape}")
+
+        x = x.squeeze(-1)
+
+        transp_rate = self.transp_rate(x)
+        try:
+            scale_factor = torch.scatter(transp_rate, -1, x[...,None], torch.zeros_like(transp_rate))
+        except:
+            raise ValueError(f"Could not scatter {transp_rate.shape} with {x.shape}")
+        scale_factor = scale_factor * dsigma[..., None]
+
+        print(f"Shapes: scale_factor: {scale_factor.shape}, transp_rate: {transp_rate.shape}")
+
+        ret = (scale_factor * unscaled_ret_value).sum(dim=-1)
+
+        print(f"Shapes: ret: {ret.shape}, ret examples: {ret[:5]}")
+
+        raise ValueError("Stop here")
+        return ret
+    
+    def score_logprobability(self, score_p, dsigma, x):
+
+        x = x.unsqueeze(-1)
+        
+        log_score_p = torch.scatter(score_p.log(), -1, x, torch.zeros_like(score_p))
+        score_p = torch.scatter(score_p, -1, x, torch.zeros_like(score_p))
+
+        # constant factor
+        const = score_p * (log_score_p - 1) + 1
+
+        unscaled_ret_value = const
+
+        x = x.squeeze(-1)
+
+        transp_rate = self.transp_rate(x)
+        try:
+            scale_factor = torch.scatter(transp_rate, -1, x[...,None], torch.zeros_like(transp_rate))
+        except:
+            raise ValueError(f"Could not scatter {transp_rate.shape} with {x.shape}")
+        scale_factor = scale_factor * dsigma[..., None]
+
+        ret = (scale_factor * unscaled_ret_value).sum(dim=-1)
+
+        """print(f"Some shapes: ret: {ret.shape}, ret examples: {ret[:5]}, scale_factor: {scale_factor.shape}, unscaled_ret_value: {unscaled_ret_value.shape}")
+        print(f"Other shapes: x: {x.shape}, log_score_p: {log_score_p.shape}, score_p: {score_p.shape}")
+        print(f"score_p examples: {score_p[:5]}, log_score_p examples: {log_score_p[:5]}")
+        print(f"Other shapes: dsigma: {dsigma.shape}")
+        raise ValueError("Stop here")"""
+
+        return ret
 
 
 class Uniform(Graph):
@@ -180,7 +267,10 @@ class Uniform(Graph):
         return self.rate(i)
 
     def transition(self, i, sigma):
-        trans = torch.ones(*i.shape, self.dim, device=i.device) * (1 - (-sigma[..., None]).exp()) / self.dim
+        try:
+            trans = torch.ones(*i.shape, self.dim, device=i.device) * (1 - (-sigma[..., None]).exp()) / self.dim
+        except:
+            raise ValueError(f"sigma shape: {sigma[..., None].shape}, i shape: {torch.ones(*i.shape, self.dim, device=i.device).shape}")
         trans = trans.scatter(-1, i[..., None], torch.zeros_like(trans))
         trans = trans.scatter(-1, i[..., None], 1 - trans.sum(dim=-1, keepdim=True))
         return trans

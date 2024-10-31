@@ -12,7 +12,7 @@ from omegaconf import OmegaConf, open_dict
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
-@hydra.main(version_base=None, config_path="configs", config_name="config")
+@hydra.main(version_base=None, config_path="configs", config_name="config_entropy")
 def main(cfg):
     ngpus = cfg.ngpus
     if "load_dir" in cfg:
