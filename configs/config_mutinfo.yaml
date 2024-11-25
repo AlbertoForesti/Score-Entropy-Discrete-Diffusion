@@ -1,12 +1,13 @@
 defaults:
   - _self_
   - model: nano_d2
-  - data: binomial
+  - data: custom_joint_33
   - override hydra/launcher: submitit_slurm
 
 ngpus: 1
-tokens: ${data.alphabet_size}
-paths: 100
+tokens: ${data.seq_length}
+alphabet_size: ${data.alphabet_size}
+paths: 1000
 x_indices: [0]
 y_indices: [1]
 estimate_entropy: False

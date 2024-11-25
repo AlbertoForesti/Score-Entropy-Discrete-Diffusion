@@ -13,7 +13,7 @@ import os
 from datasets import Dataset
 
 from scipy.stats import norm  # Used as a base distribution (to be quantized), you can use any other having a `cdf` method.
-from scipy.stats import bernoulli, binom
+from scipy.stats import bernoulli, binom, rv_discrete
 from distribution_generator.distributions import get_rv
 
 import numpy as np
@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 conda_env_path = os.environ.get('CONDA_PREFIX', '/default/path/if/not/found')
 hf_cache_dir = os.path.join(conda_env_path, 'hf_cache')
 os.environ['HF_HOME'] = hf_cache_dir
+available_distributions = ["bernoulli", "binomial", "custom_joint", "custom_univariate"]
 
 def cycle_loader(dataloader, sampler=None):
     while 1:
@@ -140,6 +141,41 @@ def get_binomial_dataset(data_config):
     dataset = Dataset.from_dict(data_dict)
     return dataset
 
+def get_custom_joint_dataset(data_config):
+    joint_dist = np.array(data_config.params.dist)
+    pmf = joint_dist.flatten()
+    values = np.arange(len(pmf))
+    rv = rv_discrete(name="hidden_univariate", values=(values, pmf))
+    samples = rv.rvs(size=data_config.n_samples)
+    samples = np.unravel_index(samples, joint_dist.shape)
+    samples = np.stack(samples, axis=1)
+    X = samples[:,0].reshape(-1,1)
+    Y = samples[:,1].reshape(-1,1)
+    
+    # Convert the NumPy array to a dictionary
+    data_dict = {"feature": np.concatenate([X,Y], axis=1)}
+
+    # Create the Hugging Face dataset
+    dataset = Dataset.from_dict(data_dict)
+    return dataset
+
+def get_custom_univariate_dataset(data_config):
+    joint_dist = np.array(data_config.params.dist)
+    pmf = joint_dist.flatten()
+    values = np.arange(len(pmf))
+    rv = rv_discrete(name="hidden_univariate", values=(values, pmf))
+    samples = rv.rvs(size=data_config.n_samples)
+    samples = np.unravel_index(samples, joint_dist.shape)
+    samples = np.stack(samples, axis=1)
+    X = samples[:,0].reshape(-1,1)
+    
+    # Convert the NumPy array to a dictionary
+    data_dict = {"feature": X}
+
+    # Create the Hugging Face dataset
+    dataset = Dataset.from_dict(data_dict)
+    return dataset
+
 def get_distribution(data_config):
     if "binomial" in data_config.train:
         p = data_config.params.p
@@ -149,6 +185,12 @@ def get_distribution(data_config):
     if hasattr(data_config, "mut_info") and data_config.mut_info is not None:
         rv = get_rv(data_config.mut_info,2,2, min_val=data_config.min_val)
         return rv.joint_dist.reshape(2,-1,1)
+    if "custom_joint" in data_config.train:
+        dist = np.array(data_config.params.dist)
+        # raise UserWarning(f"Dist shape is {dist.shape}")
+        return np.expand_dims(dist, axis=-1)
+    if  "custom_univariate" in data_config.train:
+        return np.array(data_config.params.dist).reshape(1,-1,1)
     else:
         print(data_config)
         p=data_config.params.p
@@ -197,19 +239,21 @@ def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8, data_co
         dataset = get_bernoulli_dataset(data_config)
     elif "binomial" in name:
         dataset = get_binomial_dataset(data_config)
+    elif "custom_joint" in name:
+        dataset = get_custom_joint_dataset(data_config)
+    elif "custom_univariate" in name:
+        dataset = get_custom_univariate_dataset(data_config)
     else:
         dataset = load_dataset(name, cache_dir=cache_dir, trust_remote_code=True)
 
     if name == "lambada":
         data = dataset
-    elif name == "bernoulli" or name=="binomial":
-        data = dataset
     else:
-        data = dataset[mode]
-    
-    if name == "bernoulli" or name=="binomial":
-        dataset = dataset.with_format('torch')
-        return dataset
+        for custom in available_distributions:
+            if custom in name:
+                return dataset.with_format('torch')
+        else:
+            data = dataset[mode]
 
     if name.startswith("wikitext"):
         detokenizer = wt_detokenizer

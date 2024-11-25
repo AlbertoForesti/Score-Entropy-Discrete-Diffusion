@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 _PREDICTORS = {}
 
+available_distributions = ["bernoulli", "binomial", "custom_joint", "custom_univariate"]
 
 def register_predictor(cls=None, *, name=None):
     """A decorator for registering predictor classes."""
@@ -271,7 +272,7 @@ def get_entropy_estimate_fn(config, graph, noise, batch_dims, eps, device, p=Non
                                                       predictor=config.sampling.predictor,
                                                       steps=config.sampling.steps,
                                                       denoise=config.sampling.noise_removal,
-                                                      vocab_size=config.tokens,
+                                                      vocab_size=config.alphabet_size,
                                                       eps=eps,
                                                       device=device,
                                                       proj_fun=proj_fun,
@@ -285,8 +286,8 @@ def get_entropy_estimate_fn(config, graph, noise, batch_dims, eps, device, p=Non
             estimates.append(kl)
         # print("Estimates: ", estimates)
         factor = batch_dims[1] if indeces_to_keep is None else len(indeces_to_keep)
-        print("Mean estimate: ", np.log(config.tokens*factor)-np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates))
-        return np.log(config.tokens*factor)-np.mean(estimates)
+        print("Mean estimate: ", np.log(factor*config.alphabet_size)-np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates))
+        return np.log(factor*config.alphabet_size)-np.mean(estimates)
     
     return estimate_entropy_fn
 
@@ -305,6 +306,7 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
             print("PXY: ", p, " with shape ", p.shape)
             pxy_margin = px * py.T
             pxy_margin = pxy_margin.unsqueeze(-1)
+            pxy_margin = 1/4*torch.ones_like(p)
             print("PXY MARGINAL: ", pxy_margin, " with shape ", pxy_margin.shape)
             marginal_score_fn = lambda x, s: graph.get_analytic_score(x, pxy_margin, s)
         estimates = []
@@ -313,10 +315,10 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
             for batch in tqdm(data_loader, desc="Estimating MI", total=config.paths):
                 if step==config.paths:
                     break
-                if config.data.valid != "text8" and config.data.valid != "bernoulli":
+                if config.data.valid != "text8" and config.data.valid not in available_distributions:
                     batch = batch['input_ids'].to(device)
                 else:
-                    if config.data.valid == "bernoulli":
+                    if config.data.valid in available_distributions:
                         batch = batch["feature"].to(device)
                     else:
                         batch = batch.to(device)
@@ -329,8 +331,10 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
                 except:
                     raise ValueError(f"Could not compute score for batch with shape {perturbed_batch.shape} and sigma shape {sigma.shape}")
                 score_marginal = marginal_score_fn(perturbed_batch, sigma)
-                divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch).mean().item()
-                estimates.append(divergence_estimate)
+                # print(score_marginal)
+                # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
+                divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
+                estimates.append(divergence_estimate.mean().item())
                 step += 1
         print("Mean estimate: ", np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5])
         return np.mean(estimates)
@@ -349,27 +353,25 @@ def get_entropy_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
             for batch in tqdm(data_loader, desc="Estimating Entropy", total=config.paths):
                 if step==config.paths:
                     break
-                if config.data.valid != "text8" and config.data.valid != "bernoulli" and config.data.valid != "binomial":
+                if config.data.valid != "text8" and config.data.valid not in available_distributions:
                     batch = batch['input_ids'].to(device)
                 else:
-                    if config.data.valid == "bernoulli" or config.data.valid == "binomial":
+                    if config.data.valid in available_distributions:
                         batch = batch["feature"].to(device)
                     else:
                         batch = batch.to(device)
                 t = torch.rand(batch.shape[0], 1, device=device)
                 sigma, dsigma = noise(t)
-                # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
+                # raise UserWarning(f"t is {t[:5]}, sigma is {sigma[:5]}, batch shape is {batch.shape}")
                 perturbed_batch = graph.sample_transition(batch, sigma)
-                try:
-                    score = score_fn(perturbed_batch, sigma)
-                except:
-                    raise ValueError(f"Could not compute score for batch with shape {perturbed_batch.shape} and sigma shape {sigma.shape}")
+                # raise UserWarning(f"Perturbed batch is {perturbed_batch[:5]}")
+                score = score_fn(perturbed_batch, sigma)
                 divergence_estimate = graph.score_logprobability(score, dsigma, perturbed_batch).mean().item()
                 estimates.append(divergence_estimate)
                 step += 1
-        factor = batch_dims[1] if indeces_to_keep is None else len(indeces_to_keep)
-        print("Mean estimate: ", np.log(config.tokens*factor) - np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5])
-        return np.log(config.tokens*factor) - np.mean(estimates)
+        factor = config.tokens if indeces_to_keep is None else len(indeces_to_keep)
+        print("Mean estimate: ", np.log(config.alphabet_size**factor) - np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5])
+        return np.log(config.alphabet_size**factor) - np.mean(estimates)
     return estimate_entropy_fn
 
 
@@ -381,7 +383,7 @@ def get_mutinfo_estimate_fn(config, graph, noise, batch_dims, eps, device, p=Non
                                                       predictor=config.sampling.predictor,
                                                       steps=config.sampling.steps,
                                                       denoise=config.sampling.noise_removal,
-                                                      vocab_size=config.tokens,
+                                                      vocab_size=config.alphabet_size,
                                                       eps=eps,
                                                       device=device,
                                                       proj_fun=proj_fun,
@@ -419,10 +421,10 @@ def get_entropy_montecarlo_estimate_fn(config, graph, noise, batch_dims, eps, de
                 for batch in tqdm(eval_loader, desc="Estimating Entropy", total=config.paths):
                     if step==config.paths:
                         break
-                    if config.data.valid != "text8" and config.data.valid != "bernoulli":
+                    if config.data.valid != "text8" and config.data.valid not in available_distributions:
                         batch = batch['input_ids'].to(device)
                     else:
-                        if config.data.valid == "bernoulli":
+                        if config.data.valid in available_distributions:
                             batch = batch["feature"].to(device)
                         else:
                             batch = batch.to(device)

@@ -30,11 +30,11 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False):
             print(f"Score example: {log_score[0].exp()}, t: {t[0]}")
         loss = graph.score_entropy(log_score, sigma[:, None], perturbed_batch, batch)
 
-        # print(f"Loss shape before dsigma stuff {loss.shape}")
+        print(f"Loss shape before dsigma stuff {loss.shape}")
 
         loss = (dsigma[:, None] * loss).sum(dim=-1)
 
-        # print(f"Loss shape after dsigma stuff {loss.shape}")
+        print(f"Loss shape after dsigma stuff {loss.shape}")
 
         return loss
 

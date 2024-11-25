@@ -249,7 +249,7 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         self.config = config
 
         self.absorb = config.graph.type == "absorb"
-        vocab_size = config.tokens + (1 if self.absorb else 0)
+        vocab_size = config.alphabet_size + (1 if self.absorb else 0)
 
         self.vocab_embed = EmbeddingLayer(config.model.hidden_size, vocab_size)
         self.sigma_map = TimestepEmbedder(config.model.cond_dim)

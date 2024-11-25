@@ -35,7 +35,6 @@ def get_model_fn(model, train=False):
 
     return model_fn
 
-
 def get_score_fn(model, train=False, sampling=False):
     if sampling:
         assert not train, "Must sample in eval mode"

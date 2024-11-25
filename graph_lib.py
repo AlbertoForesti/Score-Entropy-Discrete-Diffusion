@@ -4,15 +4,16 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import custom_fwd, custom_bwd
+from utils import cartesian_power
 
 
 from catsample import sample_categorical
 
 def get_graph(config, device):
     if config.graph.type == "uniform":
-        return Uniform(config.tokens)
+        return Uniform(config.alphabet_size)
     elif config.graph.type == "absorb":
-        return Absorbing(config.tokens)
+        return Absorbing(config.alphabet_size)
     else:
         raise ValueError(f"Graph {config.graph.type} not valid")
 
@@ -69,6 +70,12 @@ class Graph(abc.ABC):
         """
         pass
 
+    def gather_transition(self, i, j, sigma):
+        assert i.shape == j.shape, f"Shapes of i and j must match, got {i.shape} and {j.shape}"
+        trans = self.transition(i, sigma)
+        trans = torch.gather(trans, -1, j[...,None])
+        return trans
+
 
     def sample_transition(self, i, sigma):
         """
@@ -90,6 +97,43 @@ class Graph(abc.ABC):
 
     def sample_rate(self, i, rate):
         return sample_categorical(F.one_hot(i, num_classes=self.dim).to(rate) + rate)
+    
+    @abc.abstractmethod
+    def get_sequence_rate_matrix(self, num_toks):
+        """
+        Returns the rate matrix for a sequence of length num_toks.
+        """
+        pass
+
+    def get_sequence_transition_matrix(self, num_toks, sigma):
+        """
+        Returns the transition matrix for a sequence of length num_toks.
+        """
+        rate_matrix = self.get_sequence_rate_matrix(num_toks).to(sigma.device)
+        
+        """original_shape = i.shape
+        i = i.reshape(original_shape[0],-1)
+        try:
+            trans = torch.ones(*i.shape, self.dim, device=i.device) * (1 - (-sigma[..., None]).exp()) / self.dim
+        except:
+            raise ValueError(f"Could not compute transition with sigma shape {sigma.shape}, i shape {i.shape}")
+        trans = trans.scatter(-1, i[..., None], torch.zeros_like(trans))
+        trans = trans.scatter(-1, i[..., None], 1 - trans.sum(dim=-1, keepdim=True))
+        trans = trans.reshape(*original_shape, self.dim)"""
+
+        """trans = torch.ones(sigma.shape[0],self.dim**num_toks, self.dim**num_toks).to(sigma.device) * (1 - (-sigma[..., None]).exp()) / (self.dim**num_toks)
+        i = torch.arange(self.dim**num_toks, device=sigma.device)
+        trans[:,i,i] = 0
+        trans[:,i,i] = 1-trans.sum(dim=-2)"""
+
+        transition_matrix = torch.matrix_exp(rate_matrix)
+        transition_matrix = transition_matrix.unsqueeze(0).expand(sigma.shape[0], -1, -1)
+        ret = (1 - (-sigma[..., None]).exp()) * transition_matrix
+        i = torch.arange(transition_matrix.shape[-1], device=sigma.device)
+        ret[:,i,i] = 0
+        ret[:,i,i] = 1 - ret.sum(dim=-1)
+        # raise UserWarning(f"Transition matrix is {transition_matrix[0]}, rate matrix is {rate_matrix}, ret example is {ret[0]}")
+        return ret
 
     
     @abc.abstractmethod
@@ -116,69 +160,385 @@ class Graph(abc.ABC):
         """
         pass
 
+    def get_p_values(self, p, x):
+        """
+        Returns the values of p given x.
+        p is expected of shape (alphabet_size, ..., alphabet_size)
+        With alphabet_size repeated num_tokens times.
+        x is expected of shape (..., num_tokens)
+        """
+        old_x_shape = x.shape
+        alphabet_size = self.dim
+        num_tokens = len(p.shape)-1
+        p = p.reshape(-1)
+        x = x.reshape(-1,num_tokens)
+        index_map = torch.arange(start=num_tokens-1, end=-1, step=-1, device=p.device)
+        index_map = alphabet_size**index_map
+        index_map = index_map[None,:].expand(x.shape[0],-1)
+        new_x = (x * index_map).sum(dim=-1)
+        # raise UserWarning(f"x examples: {x[:5]}, new_x examples: {new_x[:5]}, index_map examples: {index_map[:5]}")
+        values = torch.gather(p, -1, new_x)
+        values = values.reshape(*old_x_shape[:-1])
+        return values
+    
+    def get_prod_ptok(self, x_to, x_from, sigma):
+        assert x_to.shape == x_from.shape, f"Shapes of x_to and x_from must match, got {x_to.shape} and {x_from.shape}"
+        sigma = sigma.reshape(-1)
+        old_x_shape = x_to.shape
+        num_tokens = x_to.shape[-1]
+        alphabet_size = self.dim
+        x_to = x_to.reshape(-1,num_tokens)
+        x_from = x_from.reshape(-1,num_tokens)
+        assert x_to.shape[0] == sigma.shape[0], f"x_to and x_from should match sigma in non token dims, got {x_to.shape} and {sigma.shape}"
+        token_indeces = torch.arange(alphabet_size, device=x_to.device)
+        token_indeces = token_indeces[None,None,:].expand(x_to.shape[0],num_tokens,-1)
+        from_indeces = token_indeces.unsqueeze(-1).expand(-1,-1,-1,alphabet_size)
+        to_indeces = token_indeces.unsqueeze(-2).expand(-1,-1,alphabet_size,-1)
+        trans_probs = self.gather_transition(from_indeces, to_indeces, sigma.reshape(-1,1)).squeeze(-1)
+        prod = torch.ones_like(sigma)
+        # raise UserWarning(f"Shapes are: x_to: {x_to.shape}, x_from: {x_from.shape}, trans_probs: {trans_probs.shape}, prod: {prod.shape}")
+        # trans_probs = torch.gather(trans_probs, 2, x_to[...,None,None].expand(-1,-1,-1,alphabet_size))
+        # trans_probs = torch.gather(trans_probs, 3, x_from[...,None,None].expand(-1,-1,-1,alphabet_size))
+        # trans_probs = trans_probs.reshape(trans_probs.shape[0],-1)
+        batch_size = trans_probs.shape[0]
+        for t in range(num_tokens):
+            prod *= trans_probs[torch.arange(batch_size),t,x_to[:,t],x_from[:,t]]
+        
+        return prod.reshape(*old_x_shape[:-1])
+
     def get_pt(self, p, sigma):
         """
         Computes the diffused probability given sigma.
         """
+        # raise UserWarning(f"Sigma shape is {sigma.shape}, p shape is {p.shape}")
+        """sigma = torch.ones_like(sigma)
+        bs = sigma.shape[0]
+        # Count the number of non singleton dimensions of p
+        num_tokens = sum([dim != 1 for dim in p.shape])
+        p = p.expand(bs,*(p.shape))
+        old_p_shape = p.shape
+        exp_qt = self.get_sequence_transition_matrix(num_tokens, sigma)
+        p = p.reshape(bs,-1,1)
+        p_t = torch.matmul(exp_qt, p)
+        # Clamp all the values to be between 0 and 1
+        # p_t = torch.clamp(p_t, 1e-3, 1)
+        # Normalize again
+        # p_t = p_t / p_t.sum(dim=-2, keepdim=True)
+        p_t = p_t.reshape(*old_p_shape)
+        # raise UserWarning(f"Examples: p_t: {p_t[:5]}, p: {p[:5]}, exp_qt: {exp_qt[:5]}")
+
+        return p_t"""
+        # raise UserWarning(f"p shape is {p.shape}, sigma shape is {sigma.shape}")
+        if p.shape[0] == 1:
+            p = p.squeeze(0)
+        num_tokens = len(p.shape)-1
+        sequences = cartesian_power(torch.arange(self.dim, device=p.device), num_tokens)
+        num_sequences = len(sequences)
+        sequences = sequences.unsqueeze(0).expand(sigma.shape[0],-1,-1)
+        # raise UserWarning(f"Sequences (shape={sequences.shape}): {sequences[:5]}")
+        to_sequences = sequences.unsqueeze(-2).expand(-1,-1,num_sequences,-1)
+        from_sequences = sequences.unsqueeze(1).expand(-1,num_sequences,-1,-1)
+
+        # raise UserWarning(f"Sequences examples: {sequences[:5]}, to_sequences examples: {to_sequences[:5]}, from_sequences examples: {from_sequences[:5]}")
+
+        p_cond_prod = self.get_prod_ptok(to_sequences, from_sequences, sigma.reshape(-1,1,1).expand(-1,num_sequences,num_sequences))
+        p0 = self.get_p_values(p, from_sequences)
+
+        # raise UserWarning(f"from_sequences examples: {from_sequences[:5]}, p0 examples: {p0[:5]}")
+
+        p_prod = p_cond_prod * p0
+        p_t = p_prod.sum(dim=-1)
+        p_t = p_t.reshape(-1,*p.shape)
+
+        return p_t
+
+        # raise UserWarning(f"p_t examples: {p_t[:5]}, p_cond_prod examples: {p_cond_prod[:5]}, p0 examples: {p0[:5]}, p_prod examples: {p_prod[:5]}")
+
+        # Last two dims of trans_probs are exp(sigmaQ)
+
+        # Generate all possible sequences
+        sequences = cartesian_power(torch.arange(self.dim, device=p.device), p.shape[1])
+        for seq_t in sequences:
+            cond_sum = 0
+            for seq_0 in sequences:
+                cond_prod = 1
+                for t in range(num_tokens):
+                    cond_prod *= torch.gather(trans_probs)
+        # raise UserWarning(f"Sequences: {sequences}")
+        p_expanded = p.expand(sigma.shape[0],*(p.shape))
+        p_t = torch.empty_like(p_expanded)
+
+        # raise UserWarning(f"Indeces examples: {indeces[:5]} shape: {indeces.shape}, sigma examples: {sigma[:5]}")
+        raise UserWarning(f"\Shapes:\n trans_probs: {trans_probs.shape}, from_indeces: {from_indeces.shape}, to_indeces: {to_indeces.shape}, prod_form: {prod_from.shape}, prod_from_seq: {prod_from_seq.shape} \n\
+                          Examples:\ntrans_probs examples: {trans_probs[:5]}, from_indeces examples: {from_indeces[:5]}, to_indeces examples: {to_indeces[:5]}, prod_form examples: {prod_from[:5]}")
+        # indeces = torch.arange(graph.dim).reshape(-1,1)
+        exp_qt = self.transition(indeces,sigma[...,None])
+        p = p.expand(sigma.shape[0],*(p.shape))
+        raise UserWarning(f"Shapes are p: {p.shape}, exp_qt: {exp_qt.shape}")
+        # p_t = exp_qt@p
+        p_t = torch.matmul(exp_qt, p)
+        return p_t
+        return p_t
         # p is of shape (tokens, dim, 1)
         indeces = torch.arange(self.dim, device=p.device).unsqueeze(0).unsqueeze(0)
         indeces = indeces.expand(sigma.shape[0],p.shape[0],-1)
         # indeces = torch.arange(graph.dim).reshape(-1,1)
         exp_qt = self.transition(indeces,sigma[...,None])
-        p = p.expand(sigma.shape[0],p.shape[0],-1,-1)
-        p_t = exp_qt@p
+        p = p.expand(sigma.shape[0],*(p.shape))
+        # p_t = exp_qt@p
+        p_t = torch.matmul(exp_qt, p)
+        # a = exp_qt[:,0,:,:]@p[:,0,:]
+        # b = exp_qt[:,1,:,:]@p[:,1,:]
+        # raise UserWarning(f"exp_qt examples: {exp_qt[:5]}, p examples: {p[:5]}, p_t examples: {p_t[:5]}")
+        # raise UserWarning(f"b examples: {b[:5]}, exp_qt[:,1,:,:] examples: {exp_qt[:,1,:,:][:5]}, p[:,1,:] examples: {p[:,1,:][:5]}")
+        raise UserWarning(f"Shapes are p: {p.shape}, exp_qt: {exp_qt.shape}, p_t: {p_t.shape}\
+                           \n p examples: {p[:5]}, exp_qt examples: {exp_qt[:5]}, p_t examples: {p_t[:5]}")
+        # assert torch.all(p_t >= 0), f"p_t is not positive, got {p_t}"
+        # assert torch.all(p_t <= 1), f"p_t is not less than 1, got {p_t}"
+        # assert torch.all(p_t.reshape(p_t.shape[0],-1).sum(dim=-1) == 1), f"p_t does not sum to 1, got {p_t.reshape(p_t.shape[0],-1).sum(dim=-1)}"
+        # raise UserWarning(f"p_t examples are: {p_t[:5]}, with shape {p_t.shape}")
         return p_t
-
+    
     def get_analytic_score(self, x, p, sigma):
         """
         Computes the score function given sigma.
         """
+
+        assert len(p.shape) == 3, f"p must be of shape (tokens, dim, 1), instead got shape {p.shape}"
+        assert x.shape[1] == len(p.shape)-1, f"p must match x for number of tokens, instead got x={x.shape} and p={p.shape}"
+        assert x.shape[0] == sigma.shape[0], "sigma must match x for batch size"
+
+        """if p.shape[0] == 1:
+            p_t = self.get_pt(p,sigma)
+            num = p_t.permute(0,1,3,2).expand(-1,-1,self.dim,-1)
+            den = p_t.expand(-1,-1,-1,self.dim)
+            score_matrix = num/den
+            index_tensor = x[...,None,None].expand(-1,-1,-1,self.dim)
+            # raise UserWarning(f"Num shape: {num.shape}, den shape: {den.shape}, index_tensor shape: {index_tensor.shape}, score_matrix shape: {score_matrix.shape}")
+            score = torch.gather(score_matrix,2,index_tensor)
+            return score.squeeze(2)"""
+        p_t = self.get_pt(p,sigma)
+        p_t = p_t.squeeze(-1)
+        if len(x.shape) == 2 and len(p_t.shape) == 3:
+            p_t = p_t.squeeze(1)
+        p_shape = p_t.shape
+        batch_size = p_shape[0]
+        alphabet_size = p_shape[1]
+        sequence_length = x.shape[1]
+        score_matrix = torch.empty(batch_size,0,sequence_length*alphabet_size,alphabet_size).to(p_t)
+
+        i = torch.arange(x.shape[0], device=x.device)
+        indeces = tuple([i] + [x[:, j] for j in range(sequence_length)])
+
+        den = p_t[indeces]
+        # raise UserWarning(f"den shape is {den.shape}, x examples: {x[:5]}, p_t examples: {p_t[:5]}, den examples: {den[:5]}")
+        den = den[...,None,None].expand(-1,sequence_length,alphabet_size)
+
+
+        num = torch.empty((batch_size, sequence_length, alphabet_size)).to(p_t)  # Shape: (d0, t, j)
+
+        # Iterate over t (the replaced dimension)
+        for t in range(sequence_length):
+            for a in range(alphabet_size):
+                num[:,t,a] = p_t[tuple([i] + [x[:, j] if j != t else a for j in range(sequence_length)])]
+        
+        score = num / den
+        # raise UserWarning(f"num shape is {num.shape}, p_t examples: {p_t[:5]}, x examples: {x[:5]}, score examples: {score[:5]}, den examples: {den[:5]}, num examples: {num[:5]}")
+
+        return score
+        raise UserWarning(f"num shape is {num.shape}, x examples: {x[:5]}, p_t examples: {p_t[:5]}, score examples: {score[:5]}")
+        
+        """p_t = self.get_pt(p,sigma)
+        p_t = p_t.squeeze(-1)
+        batch_size, sequence_length, alphabet_size = p_t.shape[0], p_t.shape[1], p_t.shape[2]
+        a_indices = torch.arange(batch_size).view(-1, 1, 1, 1)
+        b_indices = torch.arange(sequence_length).view(1, -1, 1, 1)
+        c_indices = torch.arange(alphabet_size).view(1, 1, -1, 1)
+        d_indices = torch.arange(alphabet_size).view(1, 1, 1, -1)
+
+        # Use broadcasting to create the full index tensors
+        a_indices = a_indices.expand(batch_size, sequence_length, alphabet_size, alphabet_size)
+        b_indices = b_indices.expand(batch_size, sequence_length, alphabet_size, alphabet_size)
+        c_indices = c_indices.expand(batch_size, sequence_length, alphabet_size, alphabet_size)
+        d_indices = d_indices.expand(batch_size, sequence_length, alphabet_size, alphabet_size)
+
+        # Compute the values for all combinations
+        num = p_t[a_indices, b_indices, d_indices]
+        den = p_t[a_indices, b_indices, c_indices]
+        score_matrix = num / den
+        p_t_exp = p_t.unsqueeze(-1)
+        p_t_exp = p_t_exp.expand(-1, -1, -1, alphabet_size)
+        den_prova = p_t_exp[a_indices, b_indices, c_indices]
+        p_t_exp = p_t.unsqueeze(1)
+        p_t_exp = p_t_exp.expand(-1, sequence_length, -1, -1)
+        num_prova = p_t_exp[a_indices, b_indices, d_indices]"""
+        raise UserWarning(f"C indices examples: {c_indices[0]}, d indices examples: {d_indices[0]}, num examples: {num_prova[0]}, den examples: {den_prova[0]}, score matrix examples: {(num_prova/den_prova)[0]}")
+        try:
+            score = torch.gather(score_matrix, 2, x[:, :, None, None].expand(batch_size, sequence_length, -1, alphabet_size))
+        except:
+            raise UserWarning(f"Could not gather score matrix with shape {score_matrix.shape} and x shape {x.shape}->{x[:, :, None, None].shape}")
+
+        # raise UserWarning(f"Score shape is: {score.shape}, x examples: {x[:5]}, p_t examples: {p_t[:5]}")
+        return score.squeeze(2)
+
+        # Reshape the result to the desired shape (x, y, z, z)
+        # values = values.squeeze(-1)
+        raise UserWarning(f"Shapes are values={score_matrix.shape}, num={num.shape}, den={den.shape}, p_t={p_t.shape}, {x}, {y}, {z},\n\
+            score_matrix example: {score_matrix[0]}, p_t example: {p_t[0]}, num: {num[0]}, den: {den[0]}")
+
+        p_t = self.get_pt(p,sigma)
+        den = p_t.expand(-1,-1,-1,self.dim)
+        num = den.permute(0,1,3,2)
+        score_matrix = num/den
+
+        r = x[:,0,None,None,None]
+        c = x[:,1,None,None,None]
+        r = r.expand(-1, -1, 2, 2)
+        c = c.expand(-1, -1, -1, 2)
+        score = torch.gather(score_matrix,1,r)
+        # raise UserWarning(f"Score shape is {score.shape}, x is {x.shape}, score_matrix is {score_matrix.shape}, r is {r.shape},c is {c.shape}")
+        score = torch.gather(score,2,c)
+        # raise UserWarning(f"Num shape: {num.shape}, den shape: {den.shape}, index_tensor shape: {index_tensor.shape}, score_matrix shape: {score_matrix.shape}, x shape: {x.shape}")
+        # score = torch.gather(score_matrix,2,index_tensor)
+
+        p_t_transpose = torch.transpose(p_t,-3,-2)
+        den_transpose = p_t_transpose.expand(-1,-1,-1,self.dim)
+        num_transpose = den_transpose.permute(0,1,3,2)
+        score_matrix_transpose = num_transpose/den_transpose
+        
+        r = x[:,1,None,None,None]
+        c = x[:,0,None,None,None]
+        r = r.expand(-1, -1, 2, 2)
+        c = c.expand(-1, -1, -1, 2)
+        score_transpose = torch.gather(score_matrix_transpose,1,r)
+        # raise UserWarning(f"Score shape is {score.shape}, x is {x.shape}, score_matrix is {score_matrix.shape}, r is {r.shape},c is {c.shape}")
+        score_transpose = torch.gather(score_transpose,2,c)
+
+        score = torch.cat([score,score_transpose],dim=1)
+
+
+        assert score_matrix[0,0,0,0] == p_t[0,0,0]/p_t[0,0,0], f"Score matrix is not well constructed, expected a/a but got: {score_matrix[0]}"
+        assert score_matrix[0,0,0,1] == p_t[0,0,1]/p_t[0,0,0], f"Score matrix is not well constructed, expected b/a but got: {score_matrix[0]}"
+        assert score_matrix[0,0,1,0] == p_t[0,0,0]/p_t[0,0,1], f"Score matrix is not well constructed, expected a/b but got: {score_matrix[0]}"
+        assert score_matrix[0,0,1,1] == p_t[0,0,1]/p_t[0,0,1], f"Score matrix is not well constructed, expected b/b but got: {score_matrix[0]}"
+        assert score_matrix[0,1,0,0] == p_t[0,1,0]/p_t[0,1,0], f"Score matrix is not well constructed, expected c/c but got: {score_matrix[0]}"
+        assert score_matrix[0,1,0,1] == p_t[0,1,1]/p_t[0,1,0], f"Score matrix is not well constructed, expected d/c but got: {score_matrix[0]}"
+        assert score_matrix[0,1,1,0] == p_t[0,1,0]/p_t[0,1,1], f"Score matrix is not well constructed, expected c/d but got: {score_matrix[0]}"
+        assert score_matrix[0,1,1,1] == p_t[0,1,1]/p_t[0,1,1], f"Score matrix is not well constructed, expected d/d but got: {score_matrix[0]}"
+
+        assert score_matrix_transpose[0,0,0,0] == p_t[0,0,0]/p_t[0,0,0], f"Score matrix transpose is not well constructed, expected a/a but got: {score_matrix_transpose[0]}"
+        assert score_matrix_transpose[0,0,0,1] == p_t[0,1,0]/p_t[0,0,0], f"Score matrix transpose is not well constructed, expected c/a but got: {score_matrix_transpose[0]}"
+        assert score_matrix_transpose[0,0,1,0] == p_t[0,0,0]/p_t[0,1,0], f"Score matrix transpose is not well constructed, expected a/c but got: {score_matrix_transpose[0]}"
+        assert score_matrix_transpose[0,0,1,1] == p_t[0,1,0]/p_t[0,1,0], f"Score matrix transpose is not well constructed, expected c/c but got: {score_matrix_transpose[0]}"
+        assert score_matrix_transpose[0,1,0,0] == p_t[0,0,1]/p_t[0,0,1], f"Score matrix transpose is not well constructed, expected b/b but got: {score_matrix_transpose[0]}"
+        assert score_matrix_transpose[0,1,0,1] == p_t[0,1,1]/p_t[0,0,1], f"Score matrix transpose is not well constructed, expected d/b but got: {score_matrix_transpose[0]}"
+        assert score_matrix_transpose[0,1,1,0] == p_t[0,0,1]/p_t[0,1,1], f"Score matrix transpose is not well constructed, expected b/d but got: {score_matrix_transpose[0]}"
+        assert score_matrix_transpose[0,1,1,1] == p_t[0,1,1]/p_t[0,1,1], f"Score matrix transpose is not well constructed, expected d/d but got: {score_matrix_transpose[0]}"
+
+        # raise UserWarning(f"p_t shape is {p_t.shape}, p_t_transpose shape is {p_t_transpose.shape}, num shape is {num.shape}, den shape is {den.shape}, num_transpose")
+        # print(f"p_t is {p_t[0]}, with shape {p_t.shape}, score is {score[0]}, with shape {score.shape}")
+
+        for i in range(10):
+            assert score[i,0,0,0] == p_t[i,x[i,0],0]/p_t[i,x[i,0],x[i,1]], f"Gather is not well constructed, expected a/a but got: {score[0]}"
+            assert score[i,0,0,1] == p_t[i,x[i,0],1]/p_t[i,x[i,0],x[i,1]], f"Gather is not well constructed, expected b/a but got: {score[0]}"
+            assert score[i,1,0,0] == p_t[i,0,x[i,1]]/p_t[i,x[i,0],x[i,1]], f"Gather is not well constructed, expected a/b but got: {score[0]}"
+            assert score[i,1,0,1] == p_t[i,1,x[i,1]]/p_t[i,x[i,0],x[i,1]], f"Gather is not well constructed, expected a/b but got: {score[0]}"
+
+        """raise UserWarning(f"p_t: {p_t[0]}\n\
+                        p_t.permute(0,1,3,2): {p_t.permute(0,1,3,2)[0]}\n\
+                        num: {num[0]}\n\
+                        den: {den[0]} \n\
+                        p_t_transpose: {p_t_transpose[0]} \n\
+                        score_matrix: {score_matrix[0]} \n\
+                        score_matrix_transpose: {score_matrix_transpose[0]}\n\
+                        x: {x[0]}\n\
+                        score: {score[0]},\n\
+                        score_transpose: {score_transpose[0]}")"""
+        return score.squeeze(2)
+
+    """def get_analytic_score(self, x, p, sigma):
+        
+        Computes the score function given sigma.
+        
         assert len(p.shape) == 3, f"p must be of shape (tokens, dim, 1), instead got shape {p.shape}"
         assert x.shape[1] == p.shape[0], f"p must match x for number of tokens, instead got x={x.shape} and p={p.shape}"
         assert x.shape[0] == sigma.shape[0], "sigma must match x for batch size"
         p_t = self.get_pt(p,sigma)
-        score_matrix = p_t.permute(0,1,3,2).expand(-1,-1,self.dim,-1)/p_t.expand(-1,-1,-1,self.dim)
+        num = p_t.permute(0,1,3,2).expand(-1,-1,self.dim,-1)
+        den = p_t.expand(-1,-1,-1,self.dim)
+        score_matrix = num/den
         index_tensor = x[...,None,None].expand(-1,-1,-1,self.dim)
+        # raise UserWarning(f"Num shape: {num.shape}, den shape: {den.shape}, index_tensor shape: {index_tensor.shape}, score_matrix shape: {score_matrix.shape}")
         score = torch.gather(score_matrix,2,index_tensor)
-        return score.squeeze(2)
+        raise UserWarning(f"p_t: {p_t[0]}\n\
+                        p_t.permute(0,1,3,2): {p_t.permute(0,1,3,2)[0]}\n\
+                        p_t.permute(0,1,3,2).expand(-1,-1,self.dim,-1): {p_t.permute(0,1,3,2).expand(-1,-1,self.dim,-1)[0]}\n\
+                        p_t.expand(-1,-1,-1,self.dim): {p_t.expand(-1,-1,-1,self.dim)[0]} \n\
+                        score_matrix: {score_matrix[0]}\n\
+                        x: {x[0]}\n\
+                        index_tensor: {index_tensor[0]}\n\
+                        score: {score[0]}")
+        return score.squeeze(2)"""
     
     def score_divergence(self, score_p, score_q, dsigma, x):
 
         # score expected s_theta(x)_y, NOT log s_theta(x)_y
 
-        print(f"Shapes: score_p: {score_p.shape}, score_q: {score_q.shape}, dsigma: {dsigma.shape}, x: {x.shape}")
+        # print(f"Shapes: score_p: {score_p.shape}, score_q: {score_q.shape}, dsigma: {dsigma.shape}, x: {x.shape}")
 
-        print(f"score_p examples: {score_p[:5]}")
-        print(f"score_q examples: {score_q[:5]}")
-        print(f"dsigma examples: {dsigma[:5]}")
-        print(f"x examples: {x[:5]}")
+        # print(f"score_p examples: {score_p[:2]}")
+        # print(f"score_q examples: {score_q[:2]}")
+        # print(f"dsigma examples: {dsigma[:2]}")
+        # print(f"x examples: {x[:2]}")
+
 
         x = x.unsqueeze(-1)
+
+        # score_p = torch.prod(score_p, dim=1, keepdim=True)
+        # score_q = torch.prod(score_q, dim=1, keepdim=True)
+
+        """score_p = torch.prod(score_p, dim=1)
+        score_q = torch.prod(score_q, dim=1)"""
         
-        log_score_p = torch.scatter(score_p.log(), -1, x, torch.zeros_like(score_p))
+        # log_score_p = torch.scatter(score_p.log(), -1, x, torch.zeros_like(score_p))
+        log_score_p = score_p.log()
+        score_p_before = score_p.clone()
         score_p = torch.scatter(score_p, -1, x, torch.zeros_like(score_p))
 
-        log_score_q = torch.scatter(score_q.log(), -1, x, torch.zeros_like(score_q))
+        # raise UserWarning(f"Score_p examples: {score_p[:5]}, x examples: {x[:5]}")
+
+        # log_score_q = torch.scatter(score_q.log(), -1, x, torch.zeros_like(score_q))
+        log_score_q = score_q.log()
+        score_q_before = score_q.clone()
         score_q = torch.scatter(score_q, -1, x, torch.zeros_like(score_q))
 
-        print(f"Shapes after scatter: score_p: {score_p.shape}, score_q: {score_q.shape}, x: {x.shape}, log_score_p: {log_score_p.shape}, log_score_q: {log_score_q.shape}")
+        # raise UserWarning(f"Example of score_p: {score_p[:5]}, Example of x: {x[:5]}")
+
+        # print(f"Shapes after scatter: score_p: {score_p.shape}, score_q: {score_q.shape}, x: {x.shape}, log_score_p: {log_score_p.shape}, log_score_q: {log_score_q.shape}")
         
-        neg_term = log_score_q * score_p
+        neg_term = score_p * log_score_q
 
         # constant factor
         const = score_p * (log_score_p - 1)
 
         #positive term
-        pos_term = torch.scatter(score_q, -1, x, torch.zeros_like(score_q))
+        pos_term = score_q
 
-        print(f"pos term examples: {pos_term[:5]}")
-        print(f"neg term examples: {neg_term[:5]}")
-        print(f"const examples: {const[:5]}")
+        # print(f"pos term examples: {pos_term[:5]}")
+        # print(f"neg term examples: {neg_term[:5]}")
+        # print(f"const examples: {const[:5]}")
 
         unscaled_ret_value = pos_term - neg_term + const
-        print(f"Unscaled ret value examples: {unscaled_ret_value[:5]}")
+        # unscaled_ret_value = const + 1
 
-        print(f"Shapes: unscaled_ret_value: {unscaled_ret_value.shape}, pos_term: {pos_term.shape}, neg_term: {neg_term.shape}, const: {const.shape}")
+        transp_rate = self.transp_rate(x)
+        scale_factor = torch.scatter(transp_rate, -1, x[...,None], torch.zeros_like(transp_rate))
+
+        # raise UserWarning(f"pos_term: {pos_term.shape}, pos_term examples: {pos_term[:5]}, neg_term: {neg_term.shape}, neg_term examples: {neg_term[:5]}, const: {const.shape}, const examples: {const[:5]}, transp rate: {transp_rate.shape}, transp rate examples: {transp_rate[:5]}, scale_factor: {scale_factor.shape}, scale_factor examples: {scale_factor[:5]}")
+        # raise UserWarning(f"Unscaled ret value shape: {unscaled_ret_value.shape}, Unscaled ret value examples: {unscaled_ret_value[:5]}")
+        # print(f"Unscaled ret value examples: {unscaled_ret_value[:5]}")
+
+        # print(f"Shapes: unscaled_ret_value: {unscaled_ret_value.shape}, pos_term: {pos_term.shape}, neg_term: {neg_term.shape}, const: {const.shape}")
 
         x = x.squeeze(-1)
 
@@ -189,18 +549,30 @@ class Graph(abc.ABC):
             raise ValueError(f"Could not scatter {transp_rate.shape} with {x.shape}")
         scale_factor = scale_factor * dsigma[..., None]
 
-        print(f"Shapes: scale_factor: {scale_factor.shape}, transp_rate: {transp_rate.shape}")
+        # unscaled_ret_value = unscaled_ret_value[:,1,:].unsqueeze(1)
+        # scale_factor = scale_factor[:,1,:].unsqueeze(1)
+        # print(f"Shapes: scale_factor: {scale_factor.shape}, transp_rate: {transp_rate.shape}")
+        ret_shape_before = (scale_factor * unscaled_ret_value).shape
+        ret = scale_factor * unscaled_ret_value
+        ret = ret[:,:2,:]
+        ret_examples = ret[:5]
+        ret_shape = ret.shape
+        ret = ret.reshape(ret.shape[0], -1)
+        ret_shape_after = ret.shape
 
-        ret = (scale_factor * unscaled_ret_value).sum(dim=-1)
+        # print(f"Shapes: const: {const.shape}, const mean: {const.mean().item()}")
+        ret = ret.sum(dim=-1)
 
-        print(f"Shapes: ret: {ret.shape}, ret examples: {ret[:5]}")
+        # raise UserWarning(f"Shapes: scale_factor: {scale_factor.shape}, ret_before: {ret_shape_before}, ret: {ret_shape}, ret after: {ret_shape_after}, ret_examples: {ret_examples}, unscaled ret examples: {unscaled_ret_value[:5]}")
 
-        raise ValueError("Stop here")
+
         return ret
     
     def score_logprobability(self, score_p, dsigma, x):
 
         x = x.unsqueeze(-1)
+
+        # raise UserWarning(f"score_p examples: {score_p[:5]}, x examples: {x[:5]}, score shape: {score_p.shape}, x shape: {x.shape}")
         
         log_score_p = torch.scatter(score_p.log(), -1, x, torch.zeros_like(score_p))
         score_p = torch.scatter(score_p, -1, x, torch.zeros_like(score_p))
@@ -217,9 +589,19 @@ class Graph(abc.ABC):
             scale_factor = torch.scatter(transp_rate, -1, x[...,None], torch.zeros_like(transp_rate))
         except:
             raise ValueError(f"Could not scatter {transp_rate.shape} with {x.shape}")
+        # raise UserWarning(f"Scale factor is {scale_factor[:5]}, x is {x[:5]}")
         scale_factor = scale_factor * dsigma[..., None]
+        # raise UserWarning(f"Scale factor is {scale_factor[:5]}, dsigma is {dsigma}, x is {x[:5]}")
 
-        ret = (scale_factor * unscaled_ret_value).sum(dim=-1)
+        # raise UserWarning(f"Scale factor examples: {scale_factor[:5]}, unscaled ret value examples: {unscaled_ret_value[:5]}, score_p examples: {score_p[:5]}, x examples: {x[:5]}, transp_rate examples: {transp_rate[:5]}")
+
+        ret = scale_factor * unscaled_ret_value
+
+        ret = ret.reshape(ret.shape[0], -1).sum(dim=-1)
+
+        # raise UserWarning(f"Ret shape: {ret.shape}, ret examples: {ret[:5]}")
+
+        # ret = (scale_factor * unscaled_ret_value).sum(dim=-1)
 
         """print(f"Some shapes: ret: {ret.shape}, ret examples: {ret[:5]}, scale_factor: {scale_factor.shape}, unscaled_ret_value: {unscaled_ret_value.shape}")
         print(f"Other shapes: x: {x.shape}, log_score_p: {log_score_p.shape}, score_p: {score_p.shape}")
@@ -240,6 +622,8 @@ class Uniform(Graph):
         for i in range(dim):    
             Q[i,i] = 1-dim
         self._Q = Q
+        self.Q_seq = None
+        self.num_toks = None
 
     @property
     def dim(self):
@@ -256,7 +640,23 @@ class Uniform(Graph):
     @property
     def Q(self):
         return self._Q
+    
+    def get_sequence_rate_matrix(self, num_toks):
 
+        if self.Q_seq is not None and self.num_toks == num_toks:
+            return self.Q_seq
+        
+        self.Q_seq = torch.zeros((self.dim**num_toks,self.dim**num_toks))
+        sequences = cartesian_power(torch.arange(self.dim), num_toks)
+
+        for i in range(self.dim**num_toks):
+            for j in range(self.dim**num_toks):
+                if torch.sum(sequences[i] != sequences[j]) >= 1:
+                    self.Q_seq[i,j] = 1
+        for i in range(self.dim**num_toks):
+            self.Q_seq[i,i] = (1-self.dim**num_toks)
+        self.num_toks = num_toks
+        return self.Q_seq
 
     def rate(self, i):
         edge = torch.ones(*i.shape, self.dim, device=i.device) / self.dim
@@ -267,12 +667,15 @@ class Uniform(Graph):
         return self.rate(i)
 
     def transition(self, i, sigma):
+        original_shape = i.shape
+        i = i.reshape(original_shape[0],-1)
         try:
             trans = torch.ones(*i.shape, self.dim, device=i.device) * (1 - (-sigma[..., None]).exp()) / self.dim
         except:
-            raise ValueError(f"sigma shape: {sigma[..., None].shape}, i shape: {torch.ones(*i.shape, self.dim, device=i.device).shape}")
+            raise ValueError(f"Could not compute transition with sigma shape {sigma.shape}, i shape {i.shape}")
         trans = trans.scatter(-1, i[..., None], torch.zeros_like(trans))
         trans = trans.scatter(-1, i[..., None], 1 - trans.sum(dim=-1, keepdim=True))
+        trans = trans.reshape(*original_shape, self.dim)
         return trans
     
     def transp_transition(self, i, sigma):
@@ -318,7 +721,9 @@ class Uniform(Graph):
 
         #positive term
         sexp = score.exp()
+        print(f"Sexp shape: {sexp.shape}")
         pos_term = sexp.mean(dim=-1) - torch.gather(sexp, -1, x[..., None]).squeeze(-1) / self.dim
+        print(f"pos_term shape: {pos_term.shape}")
         return pos_term - neg_term + const
 
 

@@ -25,6 +25,8 @@ from transformers import GPT2TokenizerFast, GPT2LMHeadModel
 torch.backends.cudnn.benchmark = True
 # torch.autograd.set_detect_anomaly(True)
 
+available_distributions = ["bernoulli", "binomial", "custom_joint", "custom_univariate"]
+
 
 def setup(rank, world_size, port):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -170,6 +172,9 @@ def _run(rank, world_size, cfg):
         proj_fun = lambda x: x
         print(f"Joint p: {p}")
         print(f"Entropy of p: {-(p * torch.log(p)).sum()}")
+        px = p.sum(dim=1)
+        py = p.sum(dim=0)
+        print(f"Mutual information of p: {torch.sum(p * torch.log(p / (px.unsqueeze(1) * py)))}")
         # p = p/p.sum(dim=1, keepdim=True)
         print(f"Marginalized p: {p}")
         indeces_to_keep = None
@@ -191,10 +196,10 @@ def _run(rank, world_size, cfg):
         step = state['step']
 
 
-        if cfg.data.train != "text8" and cfg.data.train != "bernoulli" and cfg.data.train != "binomial":
+        if cfg.data.train != "text8" and cfg.data.train not in available_distributions:
             batch = next(train_iter)['input_ids'].to(device)
         else:
-            if cfg.data.train == "bernoulli" or cfg.data.train == "binomial":
+            if cfg.data.train in available_distributions:
                 batch = next(train_iter)["feature"].to(device)
             else:
                 batch = next(train_iter).to(device)
@@ -215,10 +220,10 @@ def _run(rank, world_size, cfg):
                 utils.save_checkpoint(checkpoint_meta_dir, state)
 
             if step % cfg.training.eval_freq == 0:
-                if cfg.data.valid != "text8" and cfg.data.valid != "bernoulli" and cfg.data.valid != "binomial":
+                if cfg.data.train != "text8" and cfg.data.train not in available_distributions:
                     eval_batch = next(eval_iter)['input_ids'].to(device)
                 else:
-                    if cfg.data.train == "bernoulli" or cfg.data.train == "binomial":
+                    if cfg.data.train in available_distributions:
                         eval_batch = next(train_iter)["feature"].to(device)
                     else:
                         eval_batch = next(train_iter).to(device)
@@ -255,8 +260,8 @@ def _run(rank, world_size, cfg):
                     if cfg.estimate_mutinfo:
                         
                         if cfg.dynkin:
-                            mutinfo_estimate_dynkin = mutinfo_estimate_dynkin_fn(score_model, train_ds)
-                            print("Dynkin estimate: ", mutinfo_estimate_dynkin)
+                            mutinfo_estimate = mutinfo_estimate_dynkin_fn(score_model, train_ds)
+                            print("Dynkin estimate: ", mutinfo_estimate)
                         else:
                             mutinfo_estimate = mutinfo_estimate_fn(score_model)
                             print("Mutual Information estimate: ", mutinfo_estimate)

@@ -58,6 +58,22 @@ def restore_checkpoint(ckpt_dir, state, device):
         state['ema'].load_state_dict(loaded_state['ema'])
         state['step'] = loaded_state['step']
         return state
+    
+def cartesian_power(tensor, n):
+    """
+    Compute the Cartesian power of a tensor.
+    
+    Args:
+        tensor (torch.Tensor): The input tensor.
+        n (int): The number of times to take the Cartesian product of the tensor with itself.
+    
+    Returns:
+        torch.Tensor: The Cartesian power of the input tensor.
+    """
+    grids = [tensor] * n
+    meshgrids = torch.meshgrid(*grids, indexing='ij')
+    cartesian_product = torch.stack(meshgrids, dim=-1).reshape(-1, n)
+    return cartesian_product
 
 
 def save_checkpoint(ckpt_dir, state):
