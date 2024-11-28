@@ -202,7 +202,23 @@ class DDiTBlock(nn.Module):
         x = bias_dropout_scale_fn(self.mlp(modulate_fused(self.norm2(x), shift_mlp, scale_mlp)), None, gate_mlp, x, self.dropout)
         return x
 
+class DoubleEmbeddingLayer(nn.Module):
+    def __init__(self, dim, vocab_dim):
+        """
+        Mode arg: 0 -> use a learned layer, 1 -> use eigenvectors, 
+        2-> add in eigenvectors, 3 -> use pretrained embedding matrix
+        """
+        super().__init__()
+        self.embedding_joint = nn.Parameter(torch.empty((vocab_dim, dim)))
+        self.embedding_marginal = nn.Parameter(torch.empty((vocab_dim, dim)))
+        torch.nn.init.kaiming_uniform_(self.embedding_joint, a=math.sqrt(5))
+        torch.nn.init.kaiming_uniform_(self.embedding_marginal, a=math.sqrt(5))
 
+    def forward(self, x, is_marginal=True):
+        if not is_marginal:
+            return self.embedding_joint[x]
+        else:
+            return self.embedding_marginal[x]
 
 class EmbeddingLayer(nn.Module):
     def __init__(self, dim, vocab_dim):
@@ -214,7 +230,7 @@ class EmbeddingLayer(nn.Module):
         self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
         torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
 
-    def forward(self, x):
+    def forward(self, x, is_marginal=True):
         return self.embedding[x]
 
 
@@ -271,9 +287,10 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         )
 
 
-    def forward(self, indices, sigma):
+    def forward(self, indices, sigma, is_marginal=False):
         
-        x = self.vocab_embed(indices)
+        x = self.vocab_embed(indices, is_marginal=is_marginal)
+
         c = F.silu(self.sigma_map(sigma))
 
         rotary_cos_sin = self.rotary_emb(x)
@@ -283,7 +300,6 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
                 x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
 
             x = self.output_layer(x, c)
-
 
         if self.scale_by_sigma:
             assert self.absorb, "Haven't configured this to work."

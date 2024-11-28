@@ -99,17 +99,17 @@ class Graph(abc.ABC):
         return sample_categorical(F.one_hot(i, num_classes=self.dim).to(rate) + rate)
     
     @abc.abstractmethod
-    def get_sequence_rate_matrix(self, num_toks):
+    def get_sequence_rate_matrix(self, num_tokens):
         """
-        Returns the rate matrix for a sequence of length num_toks.
+        Returns the rate matrix for a sequence of length num_tokens.
         """
         pass
 
-    def get_sequence_transition_matrix(self, num_toks, sigma):
+    def get_sequence_transition_matrix(self, num_tokens, sigma):
         """
-        Returns the transition matrix for a sequence of length num_toks.
+        Returns the transition matrix for a sequence of length num_tokens.
         """
-        rate_matrix = self.get_sequence_rate_matrix(num_toks).to(sigma.device)
+        rate_matrix = self.get_sequence_rate_matrix(num_tokens).to(sigma.device)
         
         """original_shape = i.shape
         i = i.reshape(original_shape[0],-1)
@@ -121,8 +121,8 @@ class Graph(abc.ABC):
         trans = trans.scatter(-1, i[..., None], 1 - trans.sum(dim=-1, keepdim=True))
         trans = trans.reshape(*original_shape, self.dim)"""
 
-        """trans = torch.ones(sigma.shape[0],self.dim**num_toks, self.dim**num_toks).to(sigma.device) * (1 - (-sigma[..., None]).exp()) / (self.dim**num_toks)
-        i = torch.arange(self.dim**num_toks, device=sigma.device)
+        """trans = torch.ones(sigma.shape[0],self.dim**num_tokens, self.dim**num_tokens).to(sigma.device) * (1 - (-sigma[..., None]).exp()) / (self.dim**num_tokens)
+        i = torch.arange(self.dim**num_tokens, device=sigma.device)
         trans[:,i,i] = 0
         trans[:,i,i] = 1-trans.sum(dim=-2)"""
 
@@ -169,7 +169,7 @@ class Graph(abc.ABC):
         """
         old_x_shape = x.shape
         alphabet_size = self.dim
-        num_tokens = len(p.shape)-1
+        num_tokens = x.shape[-1]
         p = p.reshape(-1)
         x = x.reshape(-1,num_tokens)
         index_map = torch.arange(start=num_tokens-1, end=-1, step=-1, device=p.device)
@@ -229,6 +229,7 @@ class Graph(abc.ABC):
 
         return p_t"""
         # raise UserWarning(f"p shape is {p.shape}, sigma shape is {sigma.shape}")
+        assert p is not None, "p must be provided"
         if p.shape[0] == 1:
             p = p.squeeze(0)
         num_tokens = len(p.shape)-1
@@ -304,8 +305,7 @@ class Graph(abc.ABC):
         Computes the score function given sigma.
         """
 
-        assert len(p.shape) == 3, f"p must be of shape (tokens, dim, 1), instead got shape {p.shape}"
-        assert x.shape[1] == len(p.shape)-1, f"p must match x for number of tokens, instead got x={x.shape} and p={p.shape}"
+        # assert x.shape[1] == len(p.shape)-1, f"p must match x for number of tokens, instead got x={x.shape} and p={p.shape}"
         assert x.shape[0] == sigma.shape[0], "sigma must match x for batch size"
 
         """if p.shape[0] == 1:
@@ -333,7 +333,6 @@ class Graph(abc.ABC):
         den = p_t[indeces]
         # raise UserWarning(f"den shape is {den.shape}, x examples: {x[:5]}, p_t examples: {p_t[:5]}, den examples: {den[:5]}")
         den = den[...,None,None].expand(-1,sequence_length,alphabet_size)
-
 
         num = torch.empty((batch_size, sequence_length, alphabet_size)).to(p_t)  # Shape: (d0, t, j)
 
@@ -552,19 +551,13 @@ class Graph(abc.ABC):
         # unscaled_ret_value = unscaled_ret_value[:,1,:].unsqueeze(1)
         # scale_factor = scale_factor[:,1,:].unsqueeze(1)
         # print(f"Shapes: scale_factor: {scale_factor.shape}, transp_rate: {transp_rate.shape}")
-        ret_shape_before = (scale_factor * unscaled_ret_value).shape
         ret = scale_factor * unscaled_ret_value
-        ret = ret[:,:2,:]
-        ret_examples = ret[:5]
-        ret_shape = ret.shape
         ret = ret.reshape(ret.shape[0], -1)
-        ret_shape_after = ret.shape
 
         # print(f"Shapes: const: {const.shape}, const mean: {const.mean().item()}")
         ret = ret.sum(dim=-1)
 
         # raise UserWarning(f"Shapes: scale_factor: {scale_factor.shape}, ret_before: {ret_shape_before}, ret: {ret_shape}, ret after: {ret_shape_after}, ret_examples: {ret_examples}, unscaled ret examples: {unscaled_ret_value[:5]}")
-
 
         return ret
     
@@ -623,7 +616,7 @@ class Uniform(Graph):
             Q[i,i] = 1-dim
         self._Q = Q
         self.Q_seq = None
-        self.num_toks = None
+        self.num_tokens = None
 
     @property
     def dim(self):
@@ -641,21 +634,21 @@ class Uniform(Graph):
     def Q(self):
         return self._Q
     
-    def get_sequence_rate_matrix(self, num_toks):
+    def get_sequence_rate_matrix(self, num_tokens):
 
-        if self.Q_seq is not None and self.num_toks == num_toks:
+        if self.Q_seq is not None and self.num_tokens == num_tokens:
             return self.Q_seq
         
-        self.Q_seq = torch.zeros((self.dim**num_toks,self.dim**num_toks))
-        sequences = cartesian_power(torch.arange(self.dim), num_toks)
+        self.Q_seq = torch.zeros((self.dim**num_tokens,self.dim**num_tokens))
+        sequences = cartesian_power(torch.arange(self.dim), num_tokens)
 
-        for i in range(self.dim**num_toks):
-            for j in range(self.dim**num_toks):
+        for i in range(self.dim**num_tokens):
+            for j in range(self.dim**num_tokens):
                 if torch.sum(sequences[i] != sequences[j]) >= 1:
                     self.Q_seq[i,j] = 1
-        for i in range(self.dim**num_toks):
-            self.Q_seq[i,i] = (1-self.dim**num_toks)
-        self.num_toks = num_toks
+        for i in range(self.dim**num_tokens):
+            self.Q_seq[i,i] = (1-self.dim**num_tokens)
+        self.num_tokens = num_tokens
         return self.Q_seq
 
     def rate(self, i):
@@ -667,15 +660,17 @@ class Uniform(Graph):
         return self.rate(i)
 
     def transition(self, i, sigma):
-        original_shape = i.shape
-        i = i.reshape(original_shape[0],-1)
         try:
             trans = torch.ones(*i.shape, self.dim, device=i.device) * (1 - (-sigma[..., None]).exp()) / self.dim
+            trans = trans.scatter(-1, i[..., None], torch.zeros_like(trans))
+            trans = trans.scatter(-1, i[..., None], 1 - trans.sum(dim=-1, keepdim=True))
         except:
-            raise ValueError(f"Could not compute transition with sigma shape {sigma.shape}, i shape {i.shape}")
-        trans = trans.scatter(-1, i[..., None], torch.zeros_like(trans))
-        trans = trans.scatter(-1, i[..., None], 1 - trans.sum(dim=-1, keepdim=True))
-        trans = trans.reshape(*original_shape, self.dim)
+            original_shape = i.shape
+            i = i.reshape(original_shape[0],-1)
+            trans = torch.ones(*i.shape, self.dim, device=i.device) * (1 - (-sigma[..., None]).exp()) / self.dim
+            trans = trans.scatter(-1, i[..., None], torch.zeros_like(trans))
+            trans = trans.scatter(-1, i[..., None], 1 - trans.sum(dim=-1, keepdim=True))
+            trans = trans.reshape(*original_shape, self.dim)
         return trans
     
     def transp_transition(self, i, sigma):
@@ -685,6 +680,8 @@ class Uniform(Graph):
         move_chance = 1 - (-sigma).exp()
         move_indices = torch.rand(*i.shape, device=i.device) < move_chance
         i_pert = torch.where(move_indices, torch.randint_like(i, self.dim), i)
+        
+        # print(f"Examples:\n\tMove chance: {move_chance[:5]}\n\tMove indices: {move_indices[:5]}\n\tI: {i[:5]}\n\tI pert: {i_pert[:5]}")
         return i_pert
 
     def staggered_score(self, score, dsigma):
@@ -696,12 +693,14 @@ class Uniform(Graph):
         return torch.randint(0, self.dim, batch_dims)
 
     def score_entropy(self, score, sigma, x, x0):
+        
         esigm1 = torch.where(
             sigma < 0.5,
             torch.expm1(sigma),
             torch.exp(sigma) - 1
         )
         ratio = 1 - self.dim / (esigm1 + self.dim)
+        
 
         # negative term
         neg_term = score.mean(dim=-1) - torch.gather(score, -1, x[..., None]).squeeze(-1) / self.dim
@@ -721,9 +720,9 @@ class Uniform(Graph):
 
         #positive term
         sexp = score.exp()
-        print(f"Sexp shape: {sexp.shape}")
+        # print(f"Sexp shape: {sexp.shape}")
         pos_term = sexp.mean(dim=-1) - torch.gather(sexp, -1, x[..., None]).squeeze(-1) / self.dim
-        print(f"pos_term shape: {pos_term.shape}")
+        # print(f"pos_term shape: {pos_term.shape}")
         return pos_term - neg_term + const
 
 

@@ -96,7 +96,7 @@ def _run(rank, world_size, cfg):
     
     # build score model
     score_model = SEDD(cfg).to(device)
-    score_model = DDP(score_model, device_ids=[rank], static_graph=True, find_unused_parameters=True)
+    score_model = DDP(score_model, device_ids=[rank], static_graph=False, find_unused_parameters=True)
 
     num_parameters = sum(p.numel() for p in score_model.parameters())
     mprint(f"Number of parameters in the model: {num_parameters}")
@@ -108,7 +108,7 @@ def _run(rank, world_size, cfg):
 
     # build noise
     noise = noise_lib.get_noise(cfg).to(device)
-    noise = DDP(noise, device_ids=[rank], static_graph=True)
+    noise = DDP(noise, device_ids=[rank], static_graph=False)
     sampling_eps = 1e-5
 
 
@@ -142,8 +142,10 @@ def _run(rank, world_size, cfg):
 
     # Build one-step training and evaluation functions
     optimize_fn = losses.optimization_manager(cfg)
-    train_step_fn = losses.get_step_fn(noise, graph, True, optimize_fn, cfg.training.accum)
-    eval_step_fn = losses.get_step_fn(noise, graph, False, optimize_fn, cfg.training.accum)
+    if "mutinfo_config" in cfg:
+        mutinfo_config = cfg.mutinfo_config
+    else:
+        mutinfo_config = None
 
     if cfg.cond is not None:
         input_ids = torch.tensor(cfg.cond.input_ids, device=device).long()
@@ -170,15 +172,36 @@ def _run(rank, world_size, cfg):
         print(f"New p: {p}")
     else:
         proj_fun = lambda x: x
-        print(f"Joint p: {p}")
-        print(f"Entropy of p: {-(p * torch.log(p)).sum()}")
-        px = p.sum(dim=1)
-        py = p.sum(dim=0)
-        print(f"Mutual information of p: {torch.sum(p * torch.log(p / (px.unsqueeze(1) * py)))}")
-        # p = p/p.sum(dim=1, keepdim=True)
-        print(f"Marginalized p: {p}")
-        indeces_to_keep = None
+        p_joint = np.squeeze(p)
 
+        if len(p_joint.shape) > 1:
+        
+            px = p_joint.sum(dim=1)
+            py = p_joint.sum(dim=0)
+            p_marg = px.unsqueeze(1) * py
+            print(f"Joint p: {np.squeeze(p)}")
+            print(f"Mutual information of p: {torch.sum(p_joint * torch.log(p_joint / p_marg))}")
+            print(f"Marginalized p: {p_marg}")
+
+        print(f"Entropy of p: {-(p * torch.log(p)).sum()}")
+        # p = p/p.sum(dim=1, keepdim=True)
+        indeces_to_keep = None
+    
+    assert p is not None
+    p_joint = p.clone()
+    joint_score_fn = lambda x, sigma: graph.get_analytic_score(x, p_joint, sigma)
+    px = torch.sum(p, axis=1)
+    py = torch.sum(p, axis=0)
+    pxy_margin = px * py.T
+    pxy_margin = pxy_margin.unsqueeze(-1)
+    marginal_score_fn = lambda x, sigma: graph.get_analytic_score(x, pxy_margin, sigma)
+
+    if not cfg.use_analytic_score:
+        p = None
+    
+    train_step_fn = losses.get_step_fn(noise, graph, True, optimize_fn, cfg.training.accum, mutinfo_config, marginal_score_fn=marginal_score_fn, joint_score_fn=joint_score_fn)
+    eval_step_fn = losses.get_step_fn(noise, graph, False, optimize_fn, cfg.training.accum, mutinfo_config, marginal_score_fn=marginal_score_fn, joint_score_fn=joint_score_fn)
+    
     if cfg.training.snapshot_sampling:
         sampling_shape = (cfg.training.batch_size // (cfg.ngpus * cfg.training.accum), cfg.model.length)
         sampling_fn = sampling.get_sampling_fn(cfg, graph, noise, sampling_shape, sampling_eps, device)
@@ -191,11 +214,24 @@ def _run(rank, world_size, cfg):
     num_train_steps = cfg.training.n_iters
     mprint(f"Starting training loop at step {initial_step}.")
 
+    if cfg.use_analytic_score:
+        if cfg.estimate_entropy:
+            if cfg.montecarlo:
+                entropy_estimate = entropy_estimate_montecarlo_fn(score_model, train_ds)
+            elif cfg.dynkin:
+                entropy_estimate = entropy_estimate_dynkin_fn(score_model, train_ds)
+            else:
+                entropy_estimate = entropy_estimate_fn(score_model)
+        if cfg.estimate_mutinfo:
+            if cfg.dynkin:
+                mutinfo_estimate = mutinfo_estimate_dynkin_fn(score_model, train_ds)
+                print("Dynkin estimate: ", mutinfo_estimate)
+            else:
+                mutinfo_estimate = mutinfo_estimate_fn(score_model)
+                print("Mutual Information estimate: ", mutinfo_estimate)
 
-    while state['step'] < num_train_steps + 1:
+    while state['step'] < num_train_steps + 1 and not cfg.use_analytic_score:
         step = state['step']
-
-
         if cfg.data.train != "text8" and cfg.data.train not in available_distributions:
             batch = next(train_iter)['input_ids'].to(device)
         else:
@@ -205,7 +241,8 @@ def _run(rank, world_size, cfg):
                 batch = next(train_iter).to(device)
         # raise UserWarning(f"Batch shape: {batch.shape}")
         # Batch shape is (batch_size, seq_len)
-        print(f"Batch shape: {batch.shape}")
+        # print(f"Batch shape: {batch.shape}")
+        
         loss = train_step_fn(state, batch)
 
         # flag to see if there was movement ie a full batch got computed
@@ -265,6 +302,13 @@ def _run(rank, world_size, cfg):
                         else:
                             mutinfo_estimate = mutinfo_estimate_fn(score_model)
                             print("Mutual Information estimate: ", mutinfo_estimate)
+                    sample = sampling_fn(score_model)
+                    hist = np.array([[0,0],[0,0]])
+                    for s in sample:
+                        hist[s[0], s[1]] += 1
+                    hist = hist / hist.sum()
+                    print(f"Generated samples: {sample}, with shape: {sample.shape}")
+                    print(f"Histogram of samples: {hist}")
                     ema.restore(score_model.parameters())
 
                     if cfg.estimate_entropy:

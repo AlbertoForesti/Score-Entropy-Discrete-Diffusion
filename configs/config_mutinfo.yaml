@@ -1,12 +1,13 @@
 defaults:
   - _self_
   - model: nano_d2
-  - data: custom_joint_33
+  - data: custom_joint_22
   - override hydra/launcher: submitit_slurm
 
 ngpus: 1
 tokens: ${data.seq_length}
 alphabet_size: ${data.alphabet_size}
+seq_length: ${data.seq_length}
 paths: 1000
 x_indices: [0]
 y_indices: [1]
@@ -16,16 +17,24 @@ mc_times: 100
 sampling_eps: 1e-2
 montecarlo: False
 dynkin: True
+use_analytic_score: False
+
+model:
+  length: ${data.seq_length}
 
 cond: null
+
+mutinfo_config:
+  x_indices: ${x_indices}
+  y_indices: ${y_indices}
 
 training:
   batch_size: 512
   accum: 1
   n_iters: 25001
-  snapshot_freq: 1
+  snapshot_freq: 5000
   log_freq: 50
-  eval_freq: 100
+  eval_freq: 5000
   snapshot_freq_for_preemption: 10000
   weight: standard
   snapshot_sampling: True

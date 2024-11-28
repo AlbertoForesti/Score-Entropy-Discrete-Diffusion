@@ -9,7 +9,7 @@ tokens: ${data.seq_length}
 alphabet_size: ${data.alphabet_size}
 seq_length: ${data.seq_length}
 paths: 1000
-x_indices: [0]
+x_indices: 
 y_indices: [1]
 estimate_entropy: True
 estimate_mutinfo: False
@@ -17,6 +17,7 @@ mc_times: 100
 sampling_eps: 1e-2
 montecarlo: False
 dynkin: True
+use_analytic_score: False
 
 cond: null
 
@@ -24,9 +25,9 @@ training:
   batch_size: 512
   accum: 1
   n_iters: 25001
-  snapshot_freq: 1
+  snapshot_freq: 500
   log_freq: 50
-  eval_freq: 100
+  eval_freq: 500
   snapshot_freq_for_preemption: 10000
   weight: standard
   snapshot_sampling: True

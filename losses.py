@@ -6,7 +6,7 @@ import graph_lib
 from model import utils as mutils
 
 
-def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False):
+def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mutinfo_config=None, marginal_score_fn = None, joint_score_fn = None):
 
     def loss_fn(model, batch, cond=None, t=None, perturbed_batch=None):
         """
@@ -18,23 +18,56 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False):
                 raise NotImplementedError("Yeah I gotta do this later")
             else:
                 t = (1 - sampling_eps) * torch.rand(batch.shape[0], device=batch.device) + sampling_eps
-            
+        
+        # print("1 - Batch example: ", batch[0])
+        # t = 1e-3*torch.ones_like(t)
         sigma, dsigma = noise(t)
         # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
         
+        marginal_step = False
+
+        if mutinfo_config is not None:
+            marginal_step = np.random.rand() < 0.5
+            if marginal_step:
+                var_y_indices = list(mutinfo_config['y_indices'])
+                random_batch_permutation = np.random.permutation(batch.shape[0])
+                batch[np.arange(batch.shape[0]), var_y_indices] = batch[random_batch_permutation, var_y_indices]
+
         if perturbed_batch is None:
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
-        log_score_fn = mutils.get_score_fn(model, train=train, sampling=False)
+        
+        # print("2 - Batch example: ", batch[0])
+
+        log_score_fn = mutils.get_score_fn(model, train=train, sampling=False, is_marginal=marginal_step)
         log_score = log_score_fn(perturbed_batch, sigma)
+
         if np.random.rand() < 1e-2:
-            print(f"Score example: {log_score[0].exp()}, t: {t[0]}")
+            if marginal_step:
+                if marginal_score_fn is None:
+                    score_analytic = None
+                else:
+                    score_analytic = marginal_score_fn(perturbed_batch, sigma)
+            else:
+                if joint_score_fn is None:
+                    score_analytic = None    
+                else:
+                    score_analytic = joint_score_fn(perturbed_batch, sigma)
+            print(f"Score example - Marginal-{marginal_step}:\n x: {perturbed_batch[0]}\n x0: {batch[0]}\n Estimated score: {log_score[0].exp()}\n True score: {score_analytic[0]}\n t: {t[0]}")
+            print(f"Mean Absolute Error: {torch.abs(log_score.exp() - score_analytic).mean()}")
+            print(f"Mean Absolute Error with marginal: {torch.abs(log_score.exp() - marginal_score_fn(perturbed_batch, sigma)).mean()}")
+        
+        
         loss = graph.score_entropy(log_score, sigma[:, None], perturbed_batch, batch)
 
-        print(f"Loss shape before dsigma stuff {loss.shape}")
+        # print("3 - Batch example: ", batch[0])
+
+        # print(f"Loss shape before dsigma stuff {loss.shape}")
 
         loss = (dsigma[:, None] * loss).sum(dim=-1)
 
-        print(f"Loss shape after dsigma stuff {loss.shape}")
+        # print(f"Loss shape after dsigma stuff {loss.shape}")
+
+        # print("*****************************")
 
         return loss
 
@@ -80,8 +113,8 @@ def optimization_manager(config):
     return optimize_fn
 
 
-def get_step_fn(noise, graph, train, optimize_fn, accum):
-    loss_fn = get_loss_fn(noise, graph, train)
+def get_step_fn(noise, graph, train, optimize_fn, accum, mutinfo_config=None, marginal_score_fn=None, joint_score_fn=None):
+    loss_fn = get_loss_fn(noise, graph, train, mutinfo_config=mutinfo_config, marginal_score_fn=marginal_score_fn, joint_score_fn=joint_score_fn)
 
     accum_iter = 0
     total_loss = 0
@@ -91,10 +124,13 @@ def get_step_fn(noise, graph, train, optimize_fn, accum):
         nonlocal total_loss
 
         model = state['model']
-
+                
         if train:
             optimizer = state['optimizer']
             scaler = state['scaler']
+
+            # print(f"Batch example: {batch[0]}")
+
             loss = loss_fn(model, batch, cond=cond).mean() / accum
             
             scaler.scale(loss).backward()

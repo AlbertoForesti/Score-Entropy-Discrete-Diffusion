@@ -151,6 +151,12 @@ def get_custom_joint_dataset(data_config):
     samples = np.stack(samples, axis=1)
     X = samples[:,0].reshape(-1,1)
     Y = samples[:,1].reshape(-1,1)
+
+    
+    count_array = np.array([[0,0],[0,0]])
+    for i in range(len(X)):
+        count_array[X[i], Y[i]] += 1
+    count_array = count_array / count_array.sum()
     
     # Convert the NumPy array to a dictionary
     data_dict = {"feature": np.concatenate([X,Y], axis=1)}
@@ -210,8 +216,14 @@ def get_bernoulli_dataset(data_config):
     if data_config.mut_info is not None:
         rv = get_rv(data_config.mut_info,2,2, min_val=data_config.min_val)
         print("Joint distribution ", rv.joint_dist)
+        joint_dist = rv.joint_dist
+        px = joint_dist.sum(axis=0)
+        py = joint_dist.sum(axis=1)
+        marginal_distribution = np.outer(px, py)
+        print("Marginal distribution ", marginal_distribution)
+        print("GT MI ", np.sum(joint_dist * np.log(joint_dist / marginal_distribution)))
         X = rv.rvs(size=n_samples)
-        print("Data ", X)
+        print("Data ", X[:5])
     else:
         X = bernoulli.rvs(p=data_config.params.p, size=n_samples)
         X = X.reshape(-1, 1)

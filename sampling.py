@@ -150,7 +150,7 @@ class EulerPredictor(Predictor):
 
         # print("score shape ", score.shape)
         score_marginal = score_fn_marginal(x, sigma)
-        # print("score marginal examples: ", score_marginal[:5])
+        # print("score is_marginal examples: ", score_marginal[:5])
         # print("x examples: ", x[:5])
         # print("uniform score shape ", uniform_score.shape)
         rev_rate_marginal = step_size * dsigma[..., None] * self.graph.reverse_rate(x, score_marginal)
@@ -294,9 +294,9 @@ def get_entropy_estimate_fn(config, graph, noise, batch_dims, eps, device, p=Non
 def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
     
     def estimate_mutinfo_fn(model, data_loader):
-        print("batch dims: ", batch_dims)
         if p is None:
-            raise NotImplementedError("Score network architecture not implemented yet")
+            joint_score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
+            marginal_score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=True)
         else:
             joint_score_fn = lambda x, s: graph.get_analytic_score(x, p, s)
             px = torch.sum(p, axis=1)
@@ -306,8 +306,7 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
             print("PXY: ", p, " with shape ", p.shape)
             pxy_margin = px * py.T
             pxy_margin = pxy_margin.unsqueeze(-1)
-            pxy_margin = 1/4*torch.ones_like(p)
-            print("PXY MARGINAL: ", pxy_margin, " with shape ", pxy_margin.shape)
+            print("PXY is_marginal: ", pxy_margin, " with shape ", pxy_margin.shape)
             marginal_score_fn = lambda x, s: graph.get_analytic_score(x, pxy_margin, s)
         estimates = []
         with torch.no_grad():
@@ -344,7 +343,7 @@ def get_entropy_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
     
     def estimate_entropy_fn(model, data_loader):
         if p is None:
-            raise NotImplementedError("Score network architecture not implemented yet")
+            score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
         else:
             score_fn = lambda x, s: graph.get_analytic_score(x, p, s)
         estimates = []
@@ -408,7 +407,6 @@ def get_entropy_montecarlo_estimate_fn(config, graph, noise, batch_dims, eps, de
             if p is None:
                 score_fn = mutils.get_score_fn(model, train=False, sampling=True)
             else:
-                print("Using analytic score")
                 score_fn = lambda x, sigma: graph.get_analytic_score(x, p, sigma)
 
             n = int(1/eps)
@@ -592,7 +590,7 @@ def get_pc_sampler_for_mutinfo_estimate(graph, noise, batch_dims, predictor, ste
             # print("PY: ", py)
             # print("PXY: ", p)
             pxy_margin = px * py.T
-            # print("PXY MARGINAL: ", pxy_margin)
+            # print("PXY is_marginal: ", pxy_margin)
             pxy_margin = pxy_margin.unsqueeze(-1)
             marginal_score_fn = lambda x, sigma: graph.get_analytic_score(x, pxy_margin, sigma)
  

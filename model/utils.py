@@ -1,8 +1,8 @@
 import torch
 import torch.nn.functional as F
+import numpy as np
 
-
-def get_model_fn(model, train=False):
+def get_model_fn(model, train=False, is_marginal=False):
     """Create a function to give the output of the score-based model.
 
     Args:
@@ -31,18 +31,20 @@ def get_model_fn(model, train=False):
             model.eval()
         
             # otherwise output the raw values (we handle mlm training in losses.py)
-        return model(x, sigma)
+        return model(x, sigma, is_marginal=is_marginal)
 
     return model_fn
 
-def get_score_fn(model, train=False, sampling=False):
+def get_score_fn(model, train=False, sampling=False, is_marginal=False):
     if sampling:
         assert not train, "Must sample in eval mode"
-    model_fn = get_model_fn(model, train=train)
+    model_fn = get_model_fn(model, train=train, is_marginal=is_marginal)
 
     with torch.cuda.amp.autocast(dtype=torch.float16):
         def score_fn(x, sigma):
+            
             sigma = sigma.reshape(-1)
+
             score = model_fn(x, sigma)
             
             if sampling:
