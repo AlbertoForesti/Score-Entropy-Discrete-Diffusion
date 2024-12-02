@@ -9,7 +9,7 @@ tokens: ${data.seq_length}
 alphabet_size: ${data.alphabet_size}
 seq_length: ${data.seq_length}
 paths: 1000
-x_indices: 
+x_indices: [0]
 y_indices: [1]
 estimate_entropy: True
 estimate_mutinfo: False
@@ -22,7 +22,7 @@ use_analytic_score: False
 cond: null
 
 training:
-  batch_size: 512
+  batch_size: 4096
   accum: 1
   n_iters: 25001
   snapshot_freq: 500

@@ -232,7 +232,7 @@ class EmbeddingLayer(nn.Module):
 
     def forward(self, x, is_marginal=True):
         return self.embedding[x]
-
+        
 
 class DDitFinalLayer(nn.Module):
     def __init__(self, hidden_size, out_channels, cond_dim):
@@ -288,7 +288,7 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
 
 
     def forward(self, indices, sigma, is_marginal=False):
-        
+        # statistics_batch(indices)
         x = self.vocab_embed(indices, is_marginal=is_marginal)
 
         c = F.silu(self.sigma_map(sigma))

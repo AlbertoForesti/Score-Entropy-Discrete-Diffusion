@@ -3,7 +3,15 @@ import torch
 import os
 import logging
 from omegaconf import OmegaConf, open_dict
+import numpy as np
 
+
+def statistics_batch(x):
+    hist = np.zeros((torch.max(x)+1, torch.max(x)+1))
+    for s in x:
+        hist[s[0], s[1]] += 1
+    hist = hist / hist.sum()
+    raise UserWarning(f"Histogram of samples: {hist}, number of unique samples: {len(torch.unique(x))}, n_samples: {len(x)}")
 
 def load_hydra_config_from_run(load_dir):
     cfg_path = os.path.join(load_dir, ".hydra/config.yaml")

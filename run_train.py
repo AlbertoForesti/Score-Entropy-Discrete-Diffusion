@@ -303,7 +303,7 @@ def _run(rank, world_size, cfg):
                             mutinfo_estimate = mutinfo_estimate_fn(score_model)
                             print("Mutual Information estimate: ", mutinfo_estimate)
                     sample = sampling_fn(score_model)
-                    hist = np.array([[0,0],[0,0]])
+                    hist = np.zeros((torch.max(sample)+1, torch.max(sample)+1))
                     for s in sample:
                         hist[s[0], s[1]] += 1
                     hist = hist / hist.sum()

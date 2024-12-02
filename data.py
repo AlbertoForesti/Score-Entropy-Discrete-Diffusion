@@ -151,9 +151,9 @@ def get_custom_joint_dataset(data_config):
     samples = np.stack(samples, axis=1)
     X = samples[:,0].reshape(-1,1)
     Y = samples[:,1].reshape(-1,1)
-
+    # Y = np.random.permutation(Y).reshape(-1,1)
     
-    count_array = np.array([[0,0],[0,0]])
+    count_array = np.zeros((np.max(samples)+1, np.max(samples)+1))
     for i in range(len(X)):
         count_array[X[i], Y[i]] += 1
     count_array = count_array / count_array.sum()

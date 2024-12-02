@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import custom_fwd, custom_bwd
 from utils import cartesian_power
-
+from utils import statistics_batch
 
 from catsample import sample_categorical
 
@@ -699,8 +699,7 @@ class Uniform(Graph):
             torch.expm1(sigma),
             torch.exp(sigma) - 1
         )
-        ratio = 1 - self.dim / (esigm1 + self.dim)
-        
+        ratio = 1 - self.dim / (esigm1 + self.dim)        
 
         # negative term
         neg_term = score.mean(dim=-1) - torch.gather(score, -1, x[..., None]).squeeze(-1) / self.dim

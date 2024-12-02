@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import graph_lib
 from model import utils as mutils
+from utils import statistics_batch
 
 
 def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mutinfo_config=None, marginal_score_fn = None, joint_score_fn = None):
