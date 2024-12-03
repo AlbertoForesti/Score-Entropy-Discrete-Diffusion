@@ -8,6 +8,8 @@ import math
 from model import utils as mutils
 from utils import statistics_batch
 
+torch.autograd.set_detect_anomaly(True)
+
 def compute_density_for_timestep_sampling(
     weighting_scheme: str, batch_size: int, logit_mean: float = None, logit_std: float = None, mode_scale: float = None
 ):
@@ -56,8 +58,12 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mutinfo_config
             marginal_step = np.random.rand() < 0.5
             if marginal_step:
                 var_y_indices = list(mutinfo_config['y_indices'])
+                device = batch.device
+                batch = batch.cpu().numpy()
                 random_batch_permutation = np.random.permutation(batch.shape[0])
-                batch[np.arange(batch.shape[0]), var_y_indices] = batch[random_batch_permutation, var_y_indices]
+                shuffled_values = batch[random_batch_permutation, var_y_indices]
+                batch[np.arange(batch.shape[0]), var_y_indices] = shuffled_values
+                batch = torch.tensor(batch, device=device)
 
         if perturbed_batch is None:
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
@@ -120,7 +126,8 @@ def get_derivative_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mut
             if marginal_step:
                 var_y_indices = list(mutinfo_config['y_indices'])
                 random_batch_permutation = np.random.permutation(batch.shape[0])
-                batch[np.arange(batch.shape[0]), var_y_indices] = batch[random_batch_permutation, var_y_indices]
+                shuffled_values = batch[random_batch_permutation, var_y_indices].clone()
+                batch[np.arange(batch.shape[0]), var_y_indices] = shuffled_values
 
         if perturbed_batch is None:
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
@@ -231,13 +238,13 @@ def get_step_fn(noise, graph, train, optimize_fn, accum, mutinfo_config=None, ma
                 
                 # if min_loss_joint > min_loss_marginal:
                 #   print(f"Joint score loss should be lower than marginal score loss but got {min_loss_joint} > {min_loss_marginal}")
-                dloss = derivative_loss_fn(model, batch, cond=cond).mean() / accum
+                """dloss = derivative_loss_fn(model, batch, cond=cond).mean() / accum
                 dloss_joint = derivative_loss_fn(log_score_joint_fn, batch, cond=cond).mean() / accum
-                dloss_marginal = derivative_loss_fn(log_score_marginal_fn, batch, cond=cond).mean() / accum
+                dloss_marginal = derivative_loss_fn(log_score_marginal_fn, batch, cond=cond).mean() / accum"""
 
                 if np.random.rand() < 1e-3:
                     print(f"Analytic loss joint: {min_loss_joint}, Analytic loss marginal: {min_loss_marginal}, Estimated loss: {loss}")
-                    print(f"Analytic derivative loss joint: {dloss_joint}, Analytic derivative loss marginal: {dloss_marginal}, Estimated derivative loss: {dloss}")
+                    # print(f"Analytic derivative loss joint: {dloss_joint}, Analytic derivative loss marginal: {dloss_marginal}, Estimated derivative loss: {dloss}")
 
             
             scaler.scale(loss).backward()
