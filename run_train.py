@@ -19,6 +19,7 @@ import utils
 import json
 from model import SEDD
 from model.ema import ExponentialMovingAverage
+from model.mlp import DiffusionMLP
 from transformers import GPT2TokenizerFast, GPT2LMHeadModel
 
 
@@ -95,7 +96,10 @@ def _run(rank, world_size, cfg):
     graph = graph_lib.get_graph(cfg, device)
     
     # build score model
-    score_model = SEDD(cfg).to(device)
+    if cfg.model.name == "mlp":
+        score_model = DiffusionMLP(cfg).to(device)
+    else:
+        score_model = SEDD(cfg).to(device)
     score_model = DDP(score_model, device_ids=[rank], static_graph=False, find_unused_parameters=True)
 
     num_parameters = sum(p.numel() for p in score_model.parameters())

@@ -235,7 +235,7 @@ def get_step_fn(noise, graph, train, optimize_fn, accum, mutinfo_config=None, ma
                 dloss_joint = derivative_loss_fn(log_score_joint_fn, batch, cond=cond).mean() / accum
                 dloss_marginal = derivative_loss_fn(log_score_marginal_fn, batch, cond=cond).mean() / accum
 
-                if np.random.rand() < 1e-2:
+                if np.random.rand() < 1e-3:
                     print(f"Analytic loss joint: {min_loss_joint}, Analytic loss marginal: {min_loss_marginal}, Estimated loss: {loss}")
                     print(f"Analytic derivative loss joint: {dloss_joint}, Analytic derivative loss marginal: {dloss_marginal}, Estimated derivative loss: {dloss}")
 

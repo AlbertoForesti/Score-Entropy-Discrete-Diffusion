@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - model: nano_d2
+  - model: mlp
   - data: custom_joint_22
   - override hydra/launcher: submitit_slurm
 
