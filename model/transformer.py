@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import math
+import math as math
+import time
 
 from einops import rearrange
 from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
@@ -79,6 +80,7 @@ class TimestepEmbedder(nn.Module):
         """
         # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         half = dim // 2
+        # raise UserWarning(f"tmp shape is {tmp.shape}, t shape is {t.shape}, tmp device is {tmp.device}, t device is {t.device}")
         freqs = torch.exp(
             -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
         ).to(device=t.device)
@@ -103,7 +105,7 @@ class LabelEmbedder(nn.Module):
         self.embedding_table = nn.Embedding(num_classes + 1, cond_size)
         self.num_classes = num_classes
 
-        # TODO think of initializing with 0.02 std deviation like in original DiT paper
+        # TODO think of initializing with 0.02 std deviation like in original smiaottolo DiT paper
 
     def forward(self, labels):
         embeddings = self.embedding_table(labels)
@@ -111,7 +113,7 @@ class LabelEmbedder(nn.Module):
     
 
 #################################################################################
-#                                 Core Model                                    #
+#                                 Core Pasta                                   #
 #################################################################################
 
 
@@ -140,6 +142,8 @@ class DDiTBlock(nn.Module):
         self.adaLN_modulation = nn.Linear(cond_dim, 6 * dim, bias=True)
         self.adaLN_modulation.weight.data.zero_()
         self.adaLN_modulation.bias.data.zero_()
+
+        self.multi_head_attn = nn.MultiheadAttention(64, 2, dropout=dropout)
 
 
     def _get_bias_dropout_scale(self):
@@ -177,8 +181,18 @@ class DDiTBlock(nn.Module):
             )
         else:
             cu_seqlens = seqlens.cumsum(-1)
-        x = flash_attn_varlen_qkvpacked_func(
-            qkv, cu_seqlens, seq_len, 0., causal=False)
+        
+        q = qkv[:,0,:,:]
+        k = qkv[:,1,:,:]
+        v = qkv[:,2,:,:]
+
+        try:
+            x = self.multi_head_attn(q, k, v)[0]
+        except:
+            raise ValueError("Shapes: q={}, k={}, v={}".format(q.shape, k.shape, v.shape))
+        
+        """x = flash_attn_varlen_qkvpacked_func(
+            qkv, cu_seqlens, seq_len, 0., causal=False)"""
         
         x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
 
@@ -188,7 +202,23 @@ class DDiTBlock(nn.Module):
         x = bias_dropout_scale_fn(self.mlp(modulate_fused(self.norm2(x), shift_mlp, scale_mlp)), None, gate_mlp, x, self.dropout)
         return x
 
+class DoubleEmbeddingLayer(nn.Module):
+    def __init__(self, dim, vocab_dim):
+        """
+        Mode arg: 0 -> use a learned layer, 1 -> use eigenvectors, 
+        2-> add in eigenvectors, 3 -> use pretrained embedding matrix
+        """
+        super().__init__()
+        self.embedding_joint = nn.Parameter(torch.empty((vocab_dim, dim)))
+        self.embedding_marginal = nn.Parameter(torch.empty((vocab_dim, dim)))
+        torch.nn.init.kaiming_uniform_(self.embedding_joint, a=math.sqrt(5))
+        torch.nn.init.kaiming_uniform_(self.embedding_marginal, a=math.sqrt(5))
 
+    def forward(self, x, is_marginal=True):
+        if not is_marginal:
+            return self.embedding_joint[x]
+        else:
+            return self.embedding_marginal[x]
 
 class EmbeddingLayer(nn.Module):
     def __init__(self, dim, vocab_dim):
@@ -200,7 +230,7 @@ class EmbeddingLayer(nn.Module):
         self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
         torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
 
-    def forward(self, x):
+    def forward(self, x, is_marginal=True):
         return self.embedding[x]
 
 
@@ -235,7 +265,7 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         self.config = config
 
         self.absorb = config.graph.type == "absorb"
-        vocab_size = config.tokens + (1 if self.absorb else 0)
+        vocab_size = config.alphabet_size + (1 if self.absorb else 0)
 
         self.vocab_embed = EmbeddingLayer(config.model.hidden_size, vocab_size)
         self.sigma_map = TimestepEmbedder(config.model.cond_dim)
@@ -257,25 +287,30 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         )
 
 
-    def forward(self, indices, sigma):
+    def forward(self, indices, sigma, is_marginal=False):
+        
+        x = self.vocab_embed(indices, is_marginal=is_marginal)
 
-        x = self.vocab_embed(indices)
         c = F.silu(self.sigma_map(sigma))
 
         rotary_cos_sin = self.rotary_emb(x)
 
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+        with torch.cuda.amp.autocast(dtype=torch.float16):
             for i in range(len(self.blocks)):
                 x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
 
             x = self.output_layer(x, c)
 
-
         if self.scale_by_sigma:
             assert self.absorb, "Haven't configured this to work."
             esigm1_log = torch.where(sigma < 0.5, torch.expm1(sigma), sigma.exp() - 1).log().to(x.dtype)[:, None, None]
             x = x - esigm1_log - np.log(x.shape[-1] - 1)# this will be approximately averaged at 0
-            
+        
+        # print("Shape before scatter operation: ", x.shape)
+
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
+
+        # print("Output shape of model: ", x.shape)
+        # print("Shape of indices: ", indices.shape)
 
         return x

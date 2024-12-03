@@ -12,6 +12,7 @@ import json
 from datasets import Dataset
 
 from torch.utils.data import DataLoader, DistributedSampler
+from scipy.stats import rv_discrete
 
 
 def cycle_loader(dataloader, sampler=None):
@@ -115,8 +116,39 @@ def get_lambada_test_dataset():
     dataset = Dataset.from_list(lambada_data)
     return dataset
 
+def get_custom_joint_dataset(data_config):
+    joint_dist = np.array(data_config.params.dist)
+    pmf = joint_dist.flatten()
+    values = np.arange(len(pmf))
+    rv = rv_discrete(name="hidden_univariate", values=(values, pmf))
+    samples = rv.rvs(size=data_config.n_samples)
+    samples = np.unravel_index(samples, joint_dist.shape)
+    samples = np.stack(samples, axis=1)
+    X = samples[:,0].reshape(-1,1)
+    Y = samples[:,1].reshape(-1,1)
 
-def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8):
+    """XY = np.random.rand(data_config.n_samples, 1)
+    XY = XY < 0.5
+    XY = XY.astype(int)
+    XY = XY * np.ones((data_config.n_samples, 2))
+    XY = XY.astype(int)
+    data_dict = {"feature": XY}
+    """
+
+    count_array = np.array([[0,0,0],[0,0,0],[0,0,0]])
+    for i in range(len(X)):
+        count_array[X[i], Y[i]] += 1
+    count_array = count_array / count_array.sum()
+    
+    # Convert the NumPy array to a dictionary
+    data_dict = {"feature": np.concatenate([X,Y], axis=1)}
+
+    # Create the Hugging Face dataset
+    dataset = Dataset.from_dict(data_dict)
+    return dataset
+
+
+def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8, data_config=None):
     if name == "wikitext103":
         dataset = load_dataset("wikitext", name="wikitext-103-raw-v1", cache_dir=cache_dir)
     elif name == "wikitext2":
@@ -125,11 +157,15 @@ def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8):
         dataset = load_dataset("ptb_text_only", cache_dir=cache_dir)
     elif name == "lambada":
         dataset = get_lambada_test_dataset()
+    elif name == "custom_joint":
+        dataset = get_custom_joint_dataset(data_config)
     else:
         dataset = load_dataset(name, cache_dir=cache_dir)
 
     if name == "lambada":
         data = dataset
+    elif name == "custom_joint":
+        return dataset.with_format('torch')
     else:
         data = dataset[mode]
 
@@ -206,8 +242,8 @@ def get_dataloaders(config, distributed=True):
         raise ValueError(f"Eval Batch Size for {config.eval.batch_size} is not divisible by {config.ngpus} gpus with accumulation {config.training.accum}.")
 
 
-    train_set = get_dataset(config.data.train, "train", cache_dir=config.data.cache_dir, block_size=config.model.length)
-    valid_set = get_dataset(config.data.valid, "validation" if config.data.valid != "text8" else "test", cache_dir=config.data.cache_dir, block_size=config.model.length)
+    train_set = get_dataset(config.data.train, "train", cache_dir=config.data.cache_dir, block_size=config.model.length, data_config=config.data)
+    valid_set = get_dataset(config.data.valid, "validation" if config.data.valid != "text8" else "test", cache_dir=config.data.cache_dir, block_size=config.model.length, data_config=config.data)
 
     if distributed:
         train_sampler = DistributedSampler(train_set) 

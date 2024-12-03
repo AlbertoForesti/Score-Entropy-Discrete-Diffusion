@@ -1,30 +1,40 @@
 defaults:
   - _self_
-  - model: small
+  - model: nano_d2
+  - data: custom_joint_22
   - override hydra/launcher: submitit_slurm
 
-ngpus: 8
-tokens: 50257
+ngpus: 1
+tokens: ${data.seq_length}
+alphabet_size: ${data.alphabet_size}
+seq_length: ${data.seq_length}
+paths: 1000
+x_indices: 
+y_indices: [1]
+estimate_entropy: True
+estimate_mutinfo: False
+mc_times: 100
+sampling_eps: 1e-2
+montecarlo: False
+dynkin: True
+use_analytic_score: False
+
+cond: null
 
 training:
   batch_size: 512
   accum: 1
-  n_iters: 1300001
-  snapshot_freq: 50000
+  n_iters: 25001
+  snapshot_freq: 500
   log_freq: 50
-  eval_freq: 100
+  eval_freq: 500
   snapshot_freq_for_preemption: 10000
   weight: standard
   snapshot_sampling: True
   ema: 0.9999
 
-data:
-  train: openwebtext
-  valid: wikitext103
-  cache_dir: data
-
 graph:
-  type: absorb
+  type: uniform
   file: data
   report_all: False
 
@@ -51,7 +61,7 @@ optim:
   beta2: 0.999
   eps: 1e-8
   warmup: 2500
-  grad_clip: 1.
+  grad_clip: 1000.
 
 
 hydra:
@@ -65,7 +75,7 @@ hydra:
     # timeout_min: 10079
     partition: g40x
     account: stanford
-    mem_gb: 96
-    cpus_per_task: 40
+    mem_gb: 15
+    cpus_per_task: 1
     gpus_per_node: ${ngpus}
     constraint: null

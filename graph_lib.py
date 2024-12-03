@@ -160,6 +160,7 @@ class Uniform(Graph):
         return torch.randint(0, self.dim, batch_dims)
 
     def score_entropy(self, score, sigma, x, x0):
+        
         esigm1 = torch.where(
             sigma < 0.5,
             torch.expm1(sigma),
@@ -169,6 +170,13 @@ class Uniform(Graph):
 
         # negative term
         neg_term = score.mean(dim=-1) - torch.gather(score, -1, x[..., None]).squeeze(-1) / self.dim
+        if np.random.random() < 0.001:
+            print(f"Score examples: {score[:5].exp()},\n\
+                   x examples: {x[:5]},\n\
+                   x0 examples: {x0[:5]},\n\
+                   score mean: {score.mean(dim=-1)[:5]},\n\
+                   torch.gather(score, -1, x[..., None]).squeeze(-1): {torch.gather(score, -1, x[..., None]).squeeze(-1)[:5]},\n\
+                   neg_term: {neg_term[:5]}")
         # no move means scaling by the uniform ratio. move means alter only one ratio away from 1
         neg_term = torch.where(
             x == x0,

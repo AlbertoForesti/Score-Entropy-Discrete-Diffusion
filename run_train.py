@@ -145,11 +145,13 @@ def _run(rank, world_size, cfg):
     while state['step'] < num_train_steps + 1:
         step = state['step']
 
-
-        if cfg.data.train != "text8":
-            batch = next(train_iter)['input_ids'].to(device)
+        if "custom_joint" in cfg.data.train:
+            batch = next(train_iter)["feature"].to(device)
         else:
-            batch = next(train_iter).to(device)
+            if cfg.data.train != "text8":
+                batch = next(train_iter)['input_ids'].to(device)
+            else:
+                batch = next(train_iter).to(device)
         loss = train_step_fn(state, batch)
 
         # flag to see if there was movement ie a full batch got computed
@@ -164,10 +166,13 @@ def _run(rank, world_size, cfg):
                 utils.save_checkpoint(checkpoint_meta_dir, state)
 
             if step % cfg.training.eval_freq == 0:
-                if cfg.data.valid != "text8":
-                    eval_batch = next(eval_iter)['input_ids'].to(device)
+                if "custom_joint" in cfg.data.valid:
+                    eval_batch = next(train_iter)["feature"].to(device)
                 else:
-                    eval_batch = next(train_iter).to(device)
+                    if cfg.data.valid != "text8":
+                        eval_batch = next(eval_iter)['input_ids'].to(device)
+                    else:
+                        eval_batch = next(train_iter).to(device)
                 eval_loss = eval_step_fn(state, eval_batch)
 
                 dist.all_reduce(eval_loss)
@@ -194,30 +199,10 @@ def _run(rank, world_size, cfg):
                     sample = sampling_fn(score_model)
                     ema.restore(score_model.parameters())
 
-                    sentences = tokenizer.batch_decode(sample)
-                    
-                    file_name = os.path.join(this_sample_dir, f"sample_{rank}.txt")
-                    with open(file_name, 'w') as file:
-                        for sentence in sentences:
-                            file.write(sentence + "\n")
-                            file.write("============================================================================================\n")
-
-                    if cfg.eval.perplexity:
-                        with torch.no_grad():
-                            eval_model = GPT2LMHeadModel.from_pretrained("gpt2-large").to(device).eval()
-                            batches = sample.shape[0] // cfg.eval.perplexity_batch_size
-                            total_perplexity = 0
-                            for i in range(batches):
-                                s = sample[i * cfg.eval.perplexity_batch_size:(i + 1) * cfg.eval.perplexity_batch_size]
-                                loss, logits = eval_model(s, labels=s)[:2]
-                                logits = logits.transpose(-1, -2)
-                                perplexity = F.cross_entropy(logits[..., :-1], s[..., 1:], reduction="none").mean(dim=-1).exp().mean()
-                                total_perplexity += perplexity
-                            total_perplexity /= batches
-                            dist.all_reduce(total_perplexity)
-                            total_perplexity /= world_size
-                            mprint(f"Generative Perplexity at step: {step}. Perplexity: {total_perplexity:.3f}.")
-
-                            del eval_model, logits, loss
+                    hist = np.array([[0,0],[0,0]])
+                    for s in sample:
+                        hist[s[0], s[1]] += 1
+                    hist = hist / hist.sum()
+                    print(f"hist: {hist}")
 
                     dist.barrier()
