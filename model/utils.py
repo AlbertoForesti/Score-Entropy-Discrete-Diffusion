@@ -25,13 +25,19 @@ def get_model_fn(model, train=False, is_marginal=False):
         Returns:
             A tuple of (model output, new mutable states)
         """
-        if train:
-            model.train()
-        else:
-            model.eval()
+
+        if isinstance(model, torch.nn.Module):
+
+            if train:
+                model.train()
+            else:
+                model.eval()
+            
+                # otherwise output the raw values (we handle mlm training in losses.py)
+            return model(x, sigma, is_marginal=is_marginal)
         
-            # otherwise output the raw values (we handle mlm training in losses.py)
-        return model(x, sigma, is_marginal=is_marginal)
+        else:
+            return model(x, sigma)
 
     return model_fn
 

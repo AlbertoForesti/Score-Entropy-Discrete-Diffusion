@@ -251,7 +251,7 @@ class Denoiser:
         return sample_categorical(probs)
                        
 
-def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
+def get_sampling_fn(config, graph, noise, batch_dims, eps, device, p=None):
     
     sampling_fn = get_pc_sampler(graph=graph,
                                  noise=noise,
@@ -260,7 +260,8 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device):
                                  steps=config.sampling.steps,
                                  denoise=config.sampling.noise_removal,
                                  eps=eps,
-                                 device=device)
+                                 device=device,
+                                 p=p)
     
     return sampling_fn
 
@@ -514,14 +515,17 @@ def get_entropy_montecarlo_estimate_fn(config, graph, noise, batch_dims, eps, de
     return estimate_mutinfo_fn
 """    
 
-def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x):
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, p=None):
     predictor = get_predictor(predictor)(graph, noise)
     projector = proj_fun
     denoiser = Denoiser(graph, noise)
 
     @torch.no_grad()
     def pc_sampler(model):
-        sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True)
+        if p is None:
+            sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
+        else:
+            sampling_score_fn = lambda x, s: graph.get_analytic_score(x, p, s)
         x = graph.sample_limit(*batch_dims).to(device)
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps

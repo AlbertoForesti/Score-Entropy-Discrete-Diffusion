@@ -157,6 +157,8 @@ def get_custom_joint_dataset(data_config):
     for i in range(len(X)):
         count_array[X[i], Y[i]] += 1
     count_array = count_array / count_array.sum()
+
+    # raise UserWarning(f"Count array is {count_array}, joint dist is {joint_dist}")
     
     # Convert the NumPy array to a dictionary
     data_dict = {"feature": np.concatenate([X,Y], axis=1)}

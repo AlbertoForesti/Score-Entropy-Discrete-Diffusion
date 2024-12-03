@@ -204,7 +204,7 @@ def _run(rank, world_size, cfg):
     
     if cfg.training.snapshot_sampling:
         sampling_shape = (cfg.training.batch_size // (cfg.ngpus * cfg.training.accum), cfg.model.length)
-        sampling_fn = sampling.get_sampling_fn(cfg, graph, noise, sampling_shape, sampling_eps, device)
+        sampling_fn = sampling.get_sampling_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p)
         entropy_estimate_fn = sampling.get_entropy_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
         entropy_estimate_montecarlo_fn = sampling.get_entropy_montecarlo_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p)
         entropy_estimate_dynkin_fn = sampling.get_entropy_dynkin_estimate_fn(cfg, graph, noise, sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
@@ -220,6 +220,7 @@ def _run(rank, world_size, cfg):
                 entropy_estimate = entropy_estimate_montecarlo_fn(score_model, train_ds)
             elif cfg.dynkin:
                 entropy_estimate = entropy_estimate_dynkin_fn(score_model, train_ds)
+                print("Dynkin estimate: ", entropy_estimate)
             else:
                 entropy_estimate = entropy_estimate_fn(score_model)
         if cfg.estimate_mutinfo:
@@ -229,6 +230,13 @@ def _run(rank, world_size, cfg):
             else:
                 mutinfo_estimate = mutinfo_estimate_fn(score_model)
                 print("Mutual Information estimate: ", mutinfo_estimate)
+        sample = sampling_fn(score_model)
+        hist = np.zeros((torch.max(sample)+1, torch.max(sample)+1))
+        for s in sample:
+            hist[s[0], s[1]] += 1
+        hist = hist / hist.sum()
+        print(f"Generated samples: {sample}, with shape: {sample.shape}")
+        print(f"Histogram of samples: {hist}")
 
     while state['step'] < num_train_steps + 1 and not cfg.use_analytic_score:
         step = state['step']
@@ -295,7 +303,6 @@ def _run(rank, world_size, cfg):
                         else:
                             entropy_estimate = entropy_estimate_fn(score_model)
                     if cfg.estimate_mutinfo:
-                        
                         if cfg.dynkin:
                             mutinfo_estimate = mutinfo_estimate_dynkin_fn(score_model, train_ds)
                             print("Dynkin estimate: ", mutinfo_estimate)

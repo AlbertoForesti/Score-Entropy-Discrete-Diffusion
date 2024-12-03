@@ -724,6 +724,28 @@ class Uniform(Graph):
         # print(f"pos_term shape: {pos_term.shape}")
         return pos_term - neg_term + const
 
+    def derivative_score_entropy(self, score, sigma, x, x0):
+        
+        esigm1 = torch.where(
+            sigma < 0.5,
+            torch.expm1(sigma),
+            torch.exp(sigma) - 1
+        )
+        ratio = 1 - self.dim / (esigm1 + self.dim)        
+
+        # negative term
+        score = 1/score.exp()
+        score = torch.scatter(score, -1, x[..., None], torch.zeros_like(score))
+        try:
+            neg_term = ratio[...,None] * score
+        except:
+            raise UserWarning(f"Could not scatter {score.shape} with {x.shape}")
+
+        neg_term = neg_term.reshape(neg_term.shape[0], -1).sum(dim=-1)
+        pos_term = 1
+        # print(f"pos_term shape: {pos_term.shape}")
+        return pos_term - neg_term
+
 
 class Absorbing(Graph):
     def __init__(self, dim):
