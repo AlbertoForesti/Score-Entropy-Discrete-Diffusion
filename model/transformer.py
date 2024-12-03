@@ -294,9 +294,9 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         
         x = self.vocab_embed(indices, is_marginal=is_marginal)
 
-        raise UserWarning(f"X examples: {indices[:5]} with shape {indices.shape}\n\
+        """raise UserWarning(f"X examples: {indices[:5]} with shape {indices.shape}\n\
                           Sigma examples: {sigma[:5]} with shape {sigma.shape}\n\
-                          Embedding examples: {x[:5]} with shape {x.shape}")
+                          Embedding examples: {x[:5]} with shape {x.shape}")"""
 
 
         c = F.silu(self.sigma_map(sigma))
