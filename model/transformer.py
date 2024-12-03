@@ -265,7 +265,10 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         self.config = config
 
         self.absorb = config.graph.type == "absorb"
-        vocab_size = config.alphabet_size + (1 if self.absorb else 0)
+        try:
+            vocab_size = config.alphabet_size + (1 if self.absorb else 0)
+        except:
+            vocab_size = config.tokens + (1 if self.absorb else 0)
 
         self.vocab_embed = EmbeddingLayer(config.model.hidden_size, vocab_size)
         self.sigma_map = TimestepEmbedder(config.model.cond_dim)
@@ -290,6 +293,11 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
     def forward(self, indices, sigma, is_marginal=False):
         
         x = self.vocab_embed(indices, is_marginal=is_marginal)
+
+        raise UserWarning(f"X examples: {indices[:5]} with shape {indices.shape}\n\
+                          Sigma examples: {sigma[:5]} with shape {sigma.shape}\n\
+                          Embedding examples: {x[:5]} with shape {x.shape}")
+
 
         c = F.silu(self.sigma_map(sigma))
 
