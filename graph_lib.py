@@ -501,14 +501,12 @@ class Graph(abc.ABC):
         
         # log_score_p = torch.scatter(score_p.log(), -1, x, torch.zeros_like(score_p))
         log_score_p = score_p.log()
-        score_p_before = score_p.clone()
         score_p = torch.scatter(score_p, -1, x, torch.zeros_like(score_p))
 
         # raise UserWarning(f"Score_p examples: {score_p[:5]}, x examples: {x[:5]}")
 
         # log_score_q = torch.scatter(score_q.log(), -1, x, torch.zeros_like(score_q))
         log_score_q = score_q.log()
-        score_q_before = score_q.clone()
         score_q = torch.scatter(score_q, -1, x, torch.zeros_like(score_q))
 
         # raise UserWarning(f"Example of score_p: {score_p[:5]}, Example of x: {x[:5]}")

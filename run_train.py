@@ -203,8 +203,8 @@ def _run(rank, world_size, cfg):
     if not cfg.use_analytic_score:
         p = None
     
-    train_step_fn = losses.get_step_fn(noise, graph, True, optimize_fn, cfg.training.accum, mutinfo_config, marginal_score_fn=marginal_score_fn, joint_score_fn=joint_score_fn)
-    eval_step_fn = losses.get_step_fn(noise, graph, False, optimize_fn, cfg.training.accum, mutinfo_config, marginal_score_fn=marginal_score_fn, joint_score_fn=joint_score_fn)
+    train_step_fn = losses.get_step_fn(noise, graph, True, optimize_fn, cfg.training.accum, mutinfo_config, marginal_score_fn=marginal_score_fn, joint_score_fn=joint_score_fn, debug=cfg.debug)
+    eval_step_fn = losses.get_step_fn(noise, graph, False, optimize_fn, cfg.training.accum, mutinfo_config, marginal_score_fn=marginal_score_fn, joint_score_fn=joint_score_fn, debug=cfg.debug)
     
     if cfg.training.snapshot_sampling:
         sampling_shape = (cfg.training.batch_size // (cfg.ngpus * cfg.training.accum), cfg.model.length)

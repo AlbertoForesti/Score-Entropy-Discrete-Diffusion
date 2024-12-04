@@ -209,7 +209,7 @@ def optimization_manager(config):
     return optimize_fn
 
 
-def get_step_fn(noise, graph, train, optimize_fn, accum, mutinfo_config=None, marginal_score_fn=None, joint_score_fn=None):
+def get_step_fn(noise, graph, train, optimize_fn, accum, mutinfo_config=None, marginal_score_fn=None, joint_score_fn=None, debug=False):
     loss_fn = get_loss_fn(noise, graph, train, mutinfo_config=mutinfo_config, marginal_score_fn=marginal_score_fn, joint_score_fn=joint_score_fn)
     derivative_loss_fn = get_derivative_loss_fn(noise, graph, train, mutinfo_config=mutinfo_config, marginal_score_fn=marginal_score_fn, joint_score_fn=joint_score_fn)
 
@@ -230,7 +230,7 @@ def get_step_fn(noise, graph, train, optimize_fn, accum, mutinfo_config=None, ma
 
             loss = loss_fn(model, batch, cond=cond).mean() / accum
 
-            if joint_score_fn is not None and marginal_score_fn is not None:
+            if joint_score_fn is not None and marginal_score_fn is not None and debug:
                 log_score_joint_fn = lambda x, s: joint_score_fn(x, s).log()
                 min_loss_joint = loss_fn(log_score_joint_fn, batch, cond=cond).mean()
                 log_score_marginal_fn = lambda x, s: marginal_score_fn(x, s).log()
