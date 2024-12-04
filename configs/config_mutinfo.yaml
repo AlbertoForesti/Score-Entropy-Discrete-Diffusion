@@ -42,7 +42,7 @@ training:
   ema: 0.999
 
 graph:
-  type: uniform
+  type: absorb
   file: data
   report_all: False
 
