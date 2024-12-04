@@ -20,6 +20,7 @@ import json
 from model import SEDD
 from model.ema import ExponentialMovingAverage
 from model.mlp import DiffusionMLP
+from model.unetmlp import UnetMLP_simple
 from transformers import GPT2TokenizerFast, GPT2LMHeadModel
 
 
@@ -98,6 +99,8 @@ def _run(rank, world_size, cfg):
     # build score model
     if cfg.model.name == "mlp":
         score_model = DiffusionMLP(cfg).to(device)
+    elif cfg.model.name == "unetmlp":
+        score_model = UnetMLP_simple(cfg).to(device)
     else:
         score_model = SEDD(cfg).to(device)
     score_model = DDP(score_model, device_ids=[rank], static_graph=False, find_unused_parameters=True)

@@ -229,6 +229,7 @@ def get_step_fn(noise, graph, train, optimize_fn, accum, mutinfo_config=None, ma
             # print(f"Batch example: {batch[0]}")
 
             loss = loss_fn(model, batch, cond=cond).mean() / accum
+            assert not torch.isnan(loss).any(), f"Loss is NaN: {loss}"
 
             if joint_score_fn is not None and marginal_score_fn is not None and debug:
                 log_score_joint_fn = lambda x, s: joint_score_fn(x, s).log()
