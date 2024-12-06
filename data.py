@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 conda_env_path = os.environ.get('CONDA_PREFIX', '/default/path/if/not/found')
 hf_cache_dir = os.path.join(conda_env_path, 'hf_cache')
 os.environ['HF_HOME'] = hf_cache_dir
-available_distributions = ["bernoulli", "binomial", "custom_joint", "custom_univariate"]
+available_distributions = ["bernoulli", "binomial", "custom_joint", "custom_univariate","categorical", "xor"]
 
 def cycle_loader(dataloader, sampler=None):
     while 1:
@@ -190,6 +190,11 @@ def get_distribution(data_config):
         n = data_config.params.n
         dist = binom.pmf(np.arange(n+1), n, p).reshape(1,-1,1)
         return dist
+    if "categorical" in data_config.train:
+        rv = get_rv(data_config.mut_info, data_config.alphabet_size, data_config.alphabet_size, data_config.seq_length_x, data_config.seq_length_y, min_val=data_config.min_val)
+        return rv.joint_dist
+    if "xor" in data_config.train:
+        return None
     if hasattr(data_config, "mut_info") and data_config.mut_info is not None:
         rv = get_rv(data_config.mut_info,2,2, min_val=data_config.min_val)
         return rv.joint_dist.reshape(2,-1,1)
@@ -209,25 +214,19 @@ def get_bernoulli_dataset(data_config):
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
-    n_samples = 10000
-
     # random_variable = UniformlyQuantized(mutual_information, norm(loc=0.0, scale=1.0))
     # random_variable = UniformlyQuantized(mutual_information, bernoulli(0.5))
     # random_variable = UniformlyQuantized(mutual_information, poisson(4.0))
 
     if data_config.mut_info is not None:
-        rv = get_rv(data_config.mut_info,2,2, min_val=data_config.min_val)
+        rv = get_rv(data_config.mut_info,2,2,1,1,min_val=data_config.min_val)
         print("Joint distribution ", rv.joint_dist)
-        joint_dist = rv.joint_dist
-        px = joint_dist.sum(axis=0)
-        py = joint_dist.sum(axis=1)
-        marginal_distribution = np.outer(px, py)
-        print("Marginal distribution ", marginal_distribution)
-        print("GT MI ", np.sum(joint_dist * np.log(joint_dist / marginal_distribution)))
-        X = rv.rvs(size=n_samples)
-        print("Data ", X[:5])
+        print("Entropy: ", rv.entropy)
+        print("MI: ", rv.mutual_information)
+        X, Y = rv.rvs(size=data_config.n_samples)
+        X = np.concatenate([X, Y], axis=1)
     else:
-        X = bernoulli.rvs(p=data_config.params.p, size=n_samples)
+        X = bernoulli.rvs(p=data_config.params.p, size=data_config.n_samples)
         X = X.reshape(-1, 1)
 
     print("Data ", X)
@@ -239,6 +238,40 @@ def get_bernoulli_dataset(data_config):
     dataset = Dataset.from_dict(data_dict)
     return dataset
 
+def get_categorical_dataset(data_config):
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    rv = get_rv(data_config.mut_info, data_config.alphabet_size, data_config.alphabet_size, data_config.seq_length_x, data_config.seq_length_y, min_val=data_config.min_val)
+    print("Joint distribution ", rv.joint_dist)
+    print("Entropy: ", rv.entropy)
+    print("MI: ", rv.mutual_information)
+    X, Y = rv.rvs(size=data_config.n_samples)
+    X = X.reshape(X.shape[0], -1)
+    Y = Y.reshape(Y.shape[0], -1)
+
+    data = np.concatenate([X, Y], axis=1)
+    
+    data_dict = {"feature": data}
+    dataset = Dataset.from_dict(data_dict)
+    return dataset
+
+def get_xor_dataset(data_config):
+    # Generate the initial array of shape (bs, n-1)
+    X = bernoulli.rvs(p=data_config.params.p, size=(data_config.n_samples, data_config.params.n-1))
+
+    Y = bernoulli.rvs(p=data_config.params.p, size=(data_config.n_samples, 1))
+    X_xor = np.concatenate([X, Y], axis=1)
+    X_xor = np.bitwise_xor.reduce(X_xor, axis=1, keepdims=True)
+
+    # Append the XOR result as a new column to the original array
+    X = np.concatenate([X, X_xor], axis=1)
+    data = np.concatenate([X, Y], axis=1)
+    data_dict = {"feature": data}
+    dataset = Dataset.from_dict(data_dict)
+    
+    return dataset
 
 def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8, data_config=None, **kwargs):
     if name == "wikitext103":
@@ -257,6 +290,10 @@ def get_dataset(name, mode, cache_dir=None, block_size=1024, num_proc=8, data_co
         dataset = get_custom_joint_dataset(data_config)
     elif "custom_univariate" in name:
         dataset = get_custom_univariate_dataset(data_config)
+    elif "categorical" in name:
+        dataset = get_categorical_dataset(data_config)
+    elif "xor" in name:
+        dataset = get_xor_dataset(data_config)
     else:
         dataset = load_dataset(name, cache_dir=cache_dir, trust_remote_code=True)
 

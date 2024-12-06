@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 _PREDICTORS = {}
 
-available_distributions = ["bernoulli", "binomial", "custom_joint", "custom_univariate"]
+available_distributions = ["bernoulli", "binomial", "custom_joint", "custom_univariate","categorical", "xor"]
 
 def register_predictor(cls=None, *, name=None):
     """A decorator for registering predictor classes."""

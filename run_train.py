@@ -27,7 +27,7 @@ from transformers import GPT2TokenizerFast, GPT2LMHeadModel
 torch.backends.cudnn.benchmark = True
 # torch.autograd.set_detect_anomaly(True)
 
-available_distributions = ["bernoulli", "binomial", "custom_joint", "custom_univariate"]
+available_distributions = ["bernoulli", "binomial", "custom_joint", "custom_univariate","categorical", "xor"]
 
 
 def setup(rank, world_size, port):
@@ -53,9 +53,6 @@ def run_multiprocess(rank, world_size, cfg, port):
 
 
 def _run(rank, world_size, cfg):
-
-    if cfg.data.mut_info is not None and cfg.model.length != 2:
-        raise ValueError("Mutual information can only be computed for length 2 sequences. Instead got length: {}".format(cfg.model.length))
 
     torch.cuda.set_device(rank)
     work_dir = cfg.work_dir
@@ -179,29 +176,33 @@ def _run(rank, world_size, cfg):
         print(f"New p: {p}")
     else:
         proj_fun = lambda x: x
-        p_joint = np.squeeze(p)
+        if p is not None:
+            p_joint = np.squeeze(p)
 
-        if len(p_joint.shape) > 1:
-        
-            px = p_joint.sum(dim=1)
-            py = p_joint.sum(dim=0)
-            p_marg = px.unsqueeze(1) * py
-            print(f"Joint p: {np.squeeze(p)}")
-            print(f"Mutual information of p: {torch.sum(p_joint * torch.log(p_joint / p_marg))}")
-            print(f"Marginalized p: {p_marg}")
+            if len(p_joint.shape) > 1:
+            
+                px = p_joint.sum(dim=1)
+                py = p_joint.sum(dim=0)
+                p_marg = px.unsqueeze(1) * py
+                print(f"Joint p: {np.squeeze(p)}")
+                print(f"Mutual information of p: {torch.sum(p_joint * torch.log(p_joint / p_marg))}")
+                print(f"Marginalized p: {p_marg}")
 
-        print(f"Entropy of p: {-(p * torch.log(p)).sum()}")
-        # p = p/p.sum(dim=1, keepdim=True)
+            print(f"Entropy of p: {-(p * torch.log(p)).sum()}")
+            # p = p/p.sum(dim=1, keepdim=True)
         indeces_to_keep = None
     
-    assert p is not None
-    p_joint = p.clone()
-    joint_score_fn = lambda x, sigma: graph.get_analytic_score(x, p_joint, sigma)
-    px = torch.sum(p, axis=1)
-    py = torch.sum(p, axis=0)
-    pxy_margin = px * py.T
-    pxy_margin = pxy_margin.unsqueeze(-1)
-    marginal_score_fn = lambda x, sigma: graph.get_analytic_score(x, pxy_margin, sigma)
+    if p is not None:
+        p_joint = p.clone()
+        joint_score_fn = lambda x, sigma: graph.get_analytic_score(x, p_joint, sigma)
+        px = torch.sum(p, axis=1)
+        py = torch.sum(p, axis=0)
+        pxy_margin = px * py.T
+        pxy_margin = pxy_margin.unsqueeze(-1)
+        marginal_score_fn = lambda x, sigma: graph.get_analytic_score(x, pxy_margin, sigma)
+    else:
+        joint_score_fn = None
+        marginal_score_fn = None
 
     if not cfg.use_analytic_score:
         p = None
@@ -257,7 +258,7 @@ def _run(rank, world_size, cfg):
         # raise UserWarning(f"Batch shape: {batch.shape}")
         # Batch shape is (batch_size, seq_len)
         # print(f"Batch shape: {batch.shape}")
-        
+
         loss = train_step_fn(state, batch)
 
         # flag to see if there was movement ie a full batch got computed

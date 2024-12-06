@@ -61,10 +61,11 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mutinfo_config
                 device = batch.device
                 batch = batch.cpu().numpy()
                 random_batch_permutation = np.random.permutation(batch.shape[0])
-                shuffled_values = batch[random_batch_permutation, var_y_indices]
-                batch[np.arange(batch.shape[0]), var_y_indices] = shuffled_values
+                shuffled_values = batch[random_batch_permutation[:, None], var_y_indices]
+            
+                # Update the batch with the shuffled values
+                batch[np.arange(batch.shape[0])[:, None], var_y_indices] = shuffled_values
                 batch = torch.tensor(batch, device=device)
-
         if perturbed_batch is None:
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
         
