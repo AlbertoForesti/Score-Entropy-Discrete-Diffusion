@@ -1,0 +1,10 @@
+name: unetmlp
+type: ddit
+dropout: 0.1     # Keeping dropout the same
+resnet_block_groups: 8
+sigma_dim: 16
+init_dim: 32
+length: 6
+dim_mults:
+  - 1
+  - 1

@@ -1,0 +1,17 @@
+# @package _global_
+
+distribution_key: gaussian_field_img_shape=${distribution.mapping.image_shape}__base_rv_name=${distribution.base_rv._target_}
+
+hydra:
+  sweeper:
+    params:
+      ++distribution._target_: mutinfo.distributions.tools.mapped_multi_rv_frozen
+      ++distribution.base_rv._target_: mutinfo.distributions.base.CorrelatedUniform
+      ++distribution.base_rv.X_dim: 4
+      ++distribution.base_rv.Y_dim: 4
+      ++distribution.mapping._target_: minde.evaluate.test_utils.get_image_generation_fn
+      ++distribution.mapping.drawing_fn_name: draw_field
+      ++distribution.mapping.coord_fn_name: symmetric_gaussian_field
+      ++distribution.mapping.image_shape: [16, 16]
+      ++distribution.mapping.min_size: [0.2, 0.2]
+      ++distribution.mapping.max_size: [1.0, 1.0]

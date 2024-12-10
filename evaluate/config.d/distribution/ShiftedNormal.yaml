@@ -1,0 +1,19 @@
+# @package _global_
+
+distribution:
+  _target_: minde.libs.mixed_rv.ShiftedNormal
+  p: 0.5 # Probability of drawing rv_1
+  mean: 0.0
+  std: 0.01
+  shift: 1.0
+
+distribution_key: ShiftedNormal__mean=${distribution.mean}__std=${distribution.std}__shift=${distribution.shift}__p=${distribution.p}
+
+hydra:
+  sweeper:
+    params:
+      # To use different dimensionalities.
+      #++distribution.X_dim: ${default_grid.dimensionality}
+      #++distribution.Y_dim: ${default_grid.dimensionality}
+      # To use shared dimensionality.
+      ++dimensionality: 1

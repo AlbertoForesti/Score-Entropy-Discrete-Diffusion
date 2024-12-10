@@ -1,0 +1,12 @@
+# @package _global_
+
+distribution_key: xor_n_minus_1=${distribution.n_minus_1}_p=${distribution.p}
+alphabet_size: 2
+seq_length: 3
+x_indices: [0,1]
+y_indices: [2]
+
+distribution:
+  _target_: infosedd.custom_rvs.XORRandomVariable
+  p: 0.5
+  n_minus_1: 1

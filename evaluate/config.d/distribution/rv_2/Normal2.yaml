@@ -1,0 +1,8 @@
+# @package _global_
+
+rv_2:
+  _target_: mutinfo.distributions.base.CorrelatedNormal
+  # To use shared dimensionality.
+  X_dim: ${dimensionality}
+  Y_dim: ${dimensionality}
+  mutual_information: 0.0

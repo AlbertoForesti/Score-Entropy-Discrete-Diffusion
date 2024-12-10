@@ -1,0 +1,18 @@
+# @package _global_
+
+distribution:
+  _target_: mutinfo.distributions.base.CorrelatedNormal
+  # To use shared dimensionality.
+  X_dim: ${dimensionality}
+  Y_dim: ${dimensionality}
+
+distribution_key: X_dim=${distribution.X_dim}__Y_dim=${distribution.Y_dim}
+
+hydra:
+  sweeper:
+    params:
+      # To use different dimensionalities.
+      #++distribution.X_dim: ${default_grid.dimensionality}
+      #++distribution.Y_dim: ${default_grid.dimensionality}
+      # To use shared dimensionality.
+      ++dimensionality: ${default_grid.dimensionality}

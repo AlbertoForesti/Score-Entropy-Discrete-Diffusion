@@ -1,0 +1,11 @@
+# @package _global_
+
+distribution:
+  _target_: mutinfo.distributions.base.GammaExponential
+
+distribution_key: dim=${distribution.dimensionality}
+
+hydra:
+  sweeper:
+    params:
+      ++distribution.dimensionality: ${default_grid.dimensionality}

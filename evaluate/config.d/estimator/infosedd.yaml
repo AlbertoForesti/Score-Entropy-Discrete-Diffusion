@@ -1,0 +1,69 @@
+# @package _global_
+
+defaults:
+- _self_
+- model: unetmlp
+
+estimator:
+  _target_: infosedd.infosedd.InfoSEDD
+  args:
+    model: ${model}
+    ngpus: 1
+    paths: 1000
+    estimate_entropy: False
+    estimate_mutinfo: True
+    mc_times: 100
+    sampling_eps: 1e-2
+    montecarlo: False
+    dynkin: True
+    use_analytic_score: False
+    debug: False
+
+    cond: null
+
+    training:
+      batch_size: 512
+      accum: 1
+      snapshot_freq: 5000
+      log_freq: 50
+      eval_freq: 5000
+      snapshot_freq_for_preemption: 10000
+      weight: standard
+      snapshot_sampling: True
+      ema: 0.999
+      checkpoint_dir: "infosedd/checkpoints_mlp"
+      accelerator: "gpu"
+      devices: 1
+      max_steps: 5001
+      val_check_interval: 5000
+
+    graph:
+      type: absorb
+      file: data
+      report_all: False
+
+    noise:
+      type: loglinear
+      sigma_min: 1e-4
+      sigma_max: 20
+
+    sampling:
+      predictor: euler
+      steps: 128
+      noise_removal: True
+      eps: 1e-5
+
+    eval:
+      batch_size: 512
+      perplexity: True
+      perplexity_batch_size: 32
+
+    optim:
+      weight_decay: 0
+      optimizer: AdamW
+      lr: 1e-2
+      beta1: 0.9
+      beta2: 0.999
+      eps: 1e-8
+      warmup: 2500
+      grad_clip: 1.

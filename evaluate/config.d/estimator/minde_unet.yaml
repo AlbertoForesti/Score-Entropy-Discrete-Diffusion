@@ -1,0 +1,30 @@
+# @package _global_
+
+estimator:
+  _target_: minde.minde.MINDE
+  args:
+    log_example_images: True
+    return_denoised: True
+    model:
+      arch: "unet"
+      use_ema: True
+      preprocessing: "rescale"
+      hidden_dim: 8
+    training:
+      lr: 1e-5
+      bs: 512
+      max_epochs: 500
+      test_epoch: 50
+      nb_workers: 8
+      accelerator: "gpu"
+      warmup_epochs: 0
+      check_val_every_n_epoch: 50
+      checkpoint_dir: "minde/checkpoints_unet"
+      devices: 1
+    inference:
+      type: "j"
+      mc_iter: 10
+      importance_sampling: False
+      sigma: 1.0
+      bs: 512
+      generate_samples: True
