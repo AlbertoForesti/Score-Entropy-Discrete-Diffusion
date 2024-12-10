@@ -139,17 +139,17 @@ class UnetMLP_simple(nn.Module):
             self.vocab_size = self.alphabet_size + (1 if self.absorb else 0)
         except:
             self.vocab_size = self.alphabet_size + (1 if self.absorb else 0)
-        init_dim = default(config.model.init_dim, self.sequence_length)
+        init_dim = default(config.model.init_dim, self.sequence_length+1)
         if init_dim == None:
-            init_dim = self.sequence_length * self.dim_mults[0]
+            init_dim = (self.sequence_length + 1) * self.dim_mults[0]
 
-        dim_in = self.sequence_length
+        dim_in = self.sequence_length + 1 # 1 for marginal flag
         dims = [init_dim, *map(lambda m: init_dim * m, self.dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
 
         block_klass = partial(ResnetBlock, groups=self.resnet_block_groups)
 
-        self.init_lin = nn.Linear(self.sequence_length, init_dim)
+        self.init_lin = nn.Linear(dim_in, init_dim)
 
         self.sigma_mlp = nn.Sequential(
             nn.Linear(1, self.sigma_dim),
@@ -207,11 +207,8 @@ class UnetMLP_simple(nn.Module):
     def forward(self, indices, sigma, is_marginal=False, std=None):
         sigma = sigma.reshape(sigma.size(0), 1)
 
-        if is_marginal:
-            x = -indices
-        else:
-            x = indices
-
+        is_marginal_flag = -torch.ones_like(sigma) if is_marginal else torch.ones_like(sigma)
+        x = torch.cat((indices, is_marginal_flag), dim=1)
         try:        
             x = self.init_lin(x.float())
         except:
