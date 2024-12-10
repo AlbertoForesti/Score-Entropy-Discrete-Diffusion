@@ -11,7 +11,7 @@ from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
 from huggingface_hub import PyTorchModelHubMixin
 from omegaconf import OmegaConf
 
-from utils import statistics_batch
+from infosedd.utils import statistics_batch
 
 from . import rotary
 from .fused_add_dropout_scale import (

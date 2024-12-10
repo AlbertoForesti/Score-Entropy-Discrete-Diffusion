@@ -2,11 +2,11 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
-import graph_lib
+from infosedd import graph_lib
 import math
 
-from model import utils as mutils
-from utils import statistics_batch
+from infosedd.model import utils as mutils
+from infosedd.utils import statistics_batch
 
 torch.autograd.set_detect_anomaly(True)
 

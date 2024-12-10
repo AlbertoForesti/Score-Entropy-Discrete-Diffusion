@@ -1,10 +1,10 @@
 import os
 import torch
 from model import SEDD
-import utils
-from model.ema import ExponentialMovingAverage
-import graph_lib
-import noise_lib
+from infosedd import utils
+from infosedd.model.ema import ExponentialMovingAverage
+from infosedd import graph_lib
+from infosedd import noise_lib
 
 from omegaconf import OmegaConf
 

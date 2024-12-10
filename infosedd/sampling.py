@@ -2,11 +2,11 @@ import abc
 import torch
 import torch.nn.functional as F
 import numpy as np
-from catsample import sample_categorical
+from infosedd.catsample import sample_categorical
 from functools import partial
 from scipy.linalg import expm
 
-from model import utils as mutils
+from infosedd.model import utils as mutils
 from tqdm import tqdm
 
 _PREDICTORS = {}
@@ -315,23 +315,14 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
             for batch in tqdm(data_loader, desc="Estimating MI", total=config.paths):
                 if step==config.paths:
                     break
-                if config.data.valid != "text8" and config.data.valid not in available_distributions:
-                    batch = batch['input_ids'].to(device)
-                else:
-                    if config.data.valid in available_distributions:
-                        batch = batch["feature"].to(device)
-                    else:
-                        batch = batch.to(device)
                 t = torch.rand(batch.shape[0], 1, device=device)
                 sigma, dsigma = noise(t)
                 # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
                 perturbed_batch = graph.sample_transition(batch, sigma)
-                try:
-                    score_joint = joint_score_fn(perturbed_batch, sigma)
-                except:
-                    raise ValueError(f"Could not compute score for batch with shape {perturbed_batch.shape} and sigma shape {sigma.shape}")
+                
+                score_joint = joint_score_fn(perturbed_batch, sigma)
                 score_marginal = marginal_score_fn(perturbed_batch, sigma)
-                # print(score_marginal)
+                
                 # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
                 divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
                 estimates.append(divergence_estimate.mean().item())
@@ -450,70 +441,6 @@ def get_entropy_montecarlo_estimate_fn(config, graph, noise, batch_dims, eps, de
                 return np.log(config.tokens*batch_dims[1])-n*np.mean(estimates)
                     
         return estimate_entropy_fn
-
-"""def get_mutinfo_estimate_fn(config, graph, noise, batch_dims, eps, x_indices, y_indices, device):
-
-    get_pc_sampler_for_mutinfo_estimate = lambda bdims, proj_fun, indeces_to_keep: get_pc_sampler_for_entropy_estimate(graph,
-                                                      noise,
-                                                      bdims,
-                                                      config.sampling.predictor,
-                                                      config.sampling.steps,
-                                                      config.tokens,
-                                                      config.sampling.noise_removal,
-                                                      eps,
-                                                      device,
-                                                      proj_fun,
-                                                      indeces_to_keep)
-
-    def estimate_mutinfo_fn(model, eval_loader):
-        def get_proj_fun(input_ids, input_locs):
-            def proj_fun(x):
-                x[:, input_locs] = input_ids
-                return x
-            return proj_fun
-        
-        with torch.no_grad():
-            step = 0
-            estimates = []
-            estimates_for_entropy = []
-            estimate_cond1 = []
-            estimate_cond2 = []
-            for batch in tqdm(eval_loader, desc="Estimating MI", total=config.paths):
-                if step==config.paths:
-                    break
-                if config.data.valid != "text8" and config.data.valid != "bernoulli":
-                    batch = batch['input_ids'].to(device)
-                else:
-                    if config.data.valid == "bernoulli":
-                        batch = batch["feature"].to(device)
-                    else:
-                        batch = batch.to(device)
-                sampling_fn_joint = get_pc_sampler_for_mutinfo_estimate(batch.shape, lambda x: x, None)
-                
-                proj_1 = get_proj_fun(batch[:, x_indices], x_indices)
-                sampling_fn_cond1 = get_pc_sampler_for_mutinfo_estimate(batch.shape, proj_1, x_indices)
-
-                proj_2 = get_proj_fun(batch[:, y_indices], y_indices)
-                sampling_fn_cond2 = get_pc_sampler_for_mutinfo_estimate(batch.shape, proj_2, y_indices)
-                
-                val = sampling_fn_joint(model)
-                estimates_for_entropy.append(val)
-                estimate_cond1.append(sampling_fn_cond1(model))
-                estimate_cond2.append(sampling_fn_cond2(model))
-                val -= estimate_cond1[-1] # Entropy estimate must take into account lower dimension for probability distribution, since it's marginalized
-                val -= estimate_cond2[-1]
-                estimates.append(val)
-                dim_2_shape = batch.shape[1]
-                step += 1
-            print(f"Mutinfo estimates: {np.mean(estimates)}")
-            print(f"Entropy estimates: {np.log(config.tokens*dim_2_shape)-np.mean(estimates_for_entropy)}")
-            print(f"KL joint estimates: {np.mean(estimates_for_entropy)}")
-            print(f"KL cond1 estimates: {np.mean(estimate_cond1)}")
-            print(f"KL cond2 estimates: {np.mean(estimate_cond2)}")
-            return np.mean(estimates)+np.log(config.tokens/2)
-                
-    return estimate_mutinfo_fn
-"""    
 
 def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, p=None):
     predictor = get_predictor(predictor)(graph, noise)

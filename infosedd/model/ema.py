@@ -98,3 +98,9 @@ class ExponentialMovingAverage:
         self.decay = state_dict['decay']
         self.num_updates = state_dict['num_updates']
         self.shadow_params = state_dict['shadow_params']
+    
+    def set_device(self, device):
+        for i in range(len(self.shadow_params)):
+            self.shadow_params[i] = self.shadow_params[i].to(device)
+        for i in range(len(self.collected_params)):
+            self.collected_params[i] = self.collected_params[i].to(device)

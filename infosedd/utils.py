@@ -5,6 +5,33 @@ import logging
 from omegaconf import OmegaConf, open_dict
 import numpy as np
 
+from torch.utils.data import Dataset
+
+class SynthetitcDataset(Dataset):
+
+    def __init__(self, data):
+        self.data = data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
+
+def _array_to_tensor(x, dtype=torch.int64):
+    x = np.array(x)
+    if not isinstance(x, np.ndarray):
+        raise TypeError("Input must be a numpy array or convertible to one.")
+    return torch.tensor(x, dtype=dtype)
+
+def array_to_dataset(x: np.array, y: np.array):
+    x = _array_to_tensor(x)
+    y = _array_to_tensor(y)
+    data = torch.cat((x, y), dim=1)
+    if data.shape[-1] == 1:
+        data = data.squeeze(-1)
+    dataset = SynthetitcDataset(data)
+    return dataset
 
 def statistics_batch(x):
     hist = np.zeros((torch.max(x)+1, torch.max(x)+1))

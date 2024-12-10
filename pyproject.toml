@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "infosedd"
+version = "2024.12.09"
+authors = [
+  { name="Alberto Foresti", email="alberto.foresti@eurecom.fr" },
+]
+description = "Package for estimation of mutual information of discrete random variables"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "pytorch-lightning",
+    "scikit-learn",
+    "torch",
+    "torchvision",
+    "tensorboard",
+    "notebook",
+    "jupyter",
+    "einops",
+    "accelerate",
+    "flash_attn",
+    "numpy==1.26.4",
+    "transformers",
+    "datasets",
+    "mutinfo @ git+https://github.com/VanessB/mutinfo",
+    "bebeziana @ git+https://github.com/VanessB/bebeziana",
+    "distribution_generator @ git+https://github.com/AlbertoForesti/distribution-generator",
+    "hydra-core"
+]
+
+
+[project.urls]
+Homepage = "https://github.com/pypa/sampleproject"
+Issues = "https://github.com/pypa/sampleproject/issues"
+
+[tool.black]
+line-length = 88
+target-version = ["py39", "py38", "py37", "py36", "py35"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+
+[tool.hatch.build.targets.wheel]
+packages = ["infosedd"]
+
+[tool.hatch.metadata]
+allow-direct-references = true

@@ -4,10 +4,10 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import custom_fwd, custom_bwd
-from utils import cartesian_power
-from utils import statistics_batch
+from infosedd.utils import cartesian_power
+from infosedd.utils import statistics_batch
 
-from catsample import sample_categorical
+from infosedd.catsample import sample_categorical
 
 def get_graph(config, device):
     if config.graph.type == "uniform":

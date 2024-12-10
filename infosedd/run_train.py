@@ -10,17 +10,17 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn.functional as F
 
-import data
-import losses
-import sampling
-import graph_lib
-import noise_lib
-import utils
+import infosedd.data
+import infosedd.losses
+import infosedd.sampling
+import infosedd.graph_lib
+import infosedd.noise_lib
+import infosedd.utils
 import json
-from model import SEDD
-from model.ema import ExponentialMovingAverage
-from model.mlp import DiffusionMLP
-from model.unetmlp import UnetMLP_simple
+from infosedd.model import SEDD
+from infosedd.model.ema import ExponentialMovingAverage
+from infosedd.model.mlp import DiffusionMLP
+from infosedd.model.unetmlp import UnetMLP_simple
 from transformers import GPT2TokenizerFast, GPT2LMHeadModel
 
 
