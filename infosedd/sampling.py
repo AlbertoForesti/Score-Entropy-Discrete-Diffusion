@@ -313,6 +313,7 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
         with torch.no_grad():
             step = 0
             for batch in tqdm(data_loader, desc="Estimating MI", total=config.paths):
+                batch = batch.to(device)
                 if step==config.paths:
                     break
                 t = torch.rand(batch.shape[0], 1, device=device)
@@ -342,6 +343,7 @@ def get_entropy_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
         with torch.no_grad():
             step = 0
             for batch in tqdm(data_loader, desc="Estimating Entropy", total=config.paths):
+                batch = batch.to(device)
                 if step==config.paths:
                     break
                 if config.data.valid != "text8" and config.data.valid not in available_distributions:

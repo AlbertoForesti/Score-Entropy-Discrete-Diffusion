@@ -18,5 +18,5 @@ hydra:
   sweeper:
     max_batch_size: 100 # Makes startup faster, see https://github.com/facebookresearch/hydra/issues/1324.
     params:
-      ++distribution.mutual_information: 0.69
+      ++distribution.mutual_information: 0.5
       ++n_samples: 10000

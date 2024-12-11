@@ -32,8 +32,65 @@ class InfoSEDD(pl.LightningModule):
                                weight_decay=self.args.optim.weight_decay)
         return optimizer
     
-    def initialize_model(self):
+    def __call__(self, x: np.ndarray, y: np.ndarray):
+        self.args["seq_length"] = x.shape[1] + y.shape[1]
+
+        data_set = array_to_dataset(x, y)
+        self.train_loader = DataLoader(data_set, batch_size=self.args.training.batch_size, shuffle=True)
+
+        self.fit(self.train_loader)
+
+        self.ema.store(self.score_model.parameters())
+        self.ema.copy_to(self.score_model.parameters())
+        self.estimate_information_quantities(self.score_model, self.train_loader)
+        self.ema.restore(self.score_model.parameters())
+
+        ret_dict = {}
+
+        if self.mutinfo_estimate is not None:
+            ret_dict["mi"] = self.mutinfo_estimate
+        if self.entropy_estimate is not None:
+            ret_dict["entropy"] = self.entropy_estimate
+
+        return ret_dict
+    
+    def estimate_information_quantities(self, score_model, dataloader):
+        if self.args.estimate_entropy:
+            if self.args.montecarlo:
+                self.entropy_estimate = self.entropy_estimate_montecarlo_fn(score_model, dataloader)
+            elif self.args.dynkin:
+                self.entropy_estimate = self.entropy_estimate_dynkin_fn(score_model, dataloader)
+            else:
+                self.entropy_estimate = self.entropy_estimate_fn(score_model)
+        if self.args.estimate_mutinfo:
+            if self.args.dynkin:
+                self.mutinfo_estimate = self.mutinfo_estimate_dynkin_fn(score_model, dataloader)
+            else:
+                self.mutinfo_estimate = self.mutinfo_estimate_fn(score_model)
+    
+    def fit(self,train_loader,test_loader=None):
+
+        if test_loader is None:
+            test_loader = DataLoader(train_loader.dataset, batch_size=train_loader.batch_size, shuffle=False, num_workers=train_loader.num_workers)
         
+        args = self.args
+        CHECKPOINT_DIR = args.training.checkpoint_dir
+
+        logger=pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
+        
+        trainer = pl.Trainer(logger=logger,
+                         default_root_dir=CHECKPOINT_DIR,
+                         accelerator=self.args.training.accelerator,
+                         devices=self.args.training.devices,
+                         max_steps=self.args.training.max_steps,
+                         max_epochs=None,
+                         check_val_every_n_epoch=None,
+                         val_check_interval=self.args.training.val_check_interval)  
+        
+        trainer.fit(model=self, train_dataloaders=train_loader,
+                val_dataloaders=test_loader)
+    
+    def setup(self, stage=None):
         # build score model
         if self.args.model.name == "mlp":
             score_model = DiffusionMLP(self.args)
@@ -105,69 +162,6 @@ class InfoSEDD(pl.LightningModule):
         self.loss_fn_train = losses.get_loss_fn(self.noise, self.graph, True, sampling_eps, False, mutinfo_config, self.marginal_score_fn, self.joint_score_fn)
         self.loss_fn_test = losses.get_loss_fn(self.noise, self.graph, False, sampling_eps, False, mutinfo_config, self.marginal_score_fn, self.joint_score_fn)
 
-    
-    def __call__(self, x: np.ndarray, y: np.ndarray):
-        self.args["seq_length"] = x.shape[1] + y.shape[1]
-
-        self.initialize_model()
-
-        data_set = array_to_dataset(x, y)
-        train_loader = DataLoader(data_set, batch_size=self.args.training.batch_size, shuffle=True)
-
-        self.fit(train_loader)
-
-        self.ema.store(self.score_model.parameters())
-        self.ema.copy_to(self.score_model.parameters())
-        self.estimate_information_quantities(self.score_model, train_loader)
-        self.ema.restore(self.score_model.parameters())
-
-        ret_dict = {}
-
-        if self.mutinfo_estimate is not None:
-            ret_dict["mi"] = self.mutinfo_estimate
-        if self.entropy_estimate is not None:
-            ret_dict["entropy"] = self.entropy_estimate
-
-        return ret_dict
-    
-    def estimate_information_quantities(self, score_model, dataloader):
-        if self.args.estimate_entropy:
-            if self.args.montecarlo:
-                self.entropy_estimate = self.entropy_estimate_montecarlo_fn(score_model, dataloader)
-            elif self.args.dynkin:
-                self.entropy_estimate = self.entropy_estimate_dynkin_fn(score_model, dataloader)
-            else:
-                self.entropy_estimate = self.entropy_estimate_fn(score_model)
-        if self.args.estimate_mutinfo:
-            if self.args.dynkin:
-                self.mutinfo_estimate = self.mutinfo_estimate_dynkin_fn(score_model, dataloader)
-            else:
-                self.mutinfo_estimate = self.mutinfo_estimate_fn(score_model)
-    
-    def fit(self,train_loader,test_loader=None):
-
-        if test_loader is None:
-            test_loader = DataLoader(train_loader.dataset, batch_size=train_loader.batch_size, shuffle=False, num_workers=train_loader.num_workers)
-        
-        args = self.args
-        CHECKPOINT_DIR = args.training.checkpoint_dir
-
-        logger=pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
-        
-        trainer = pl.Trainer(logger=logger,
-                         default_root_dir=CHECKPOINT_DIR,
-                         accelerator=self.args.training.accelerator,
-                         devices=self.args.training.devices,
-                         max_steps=self.args.training.max_steps,
-                         max_epochs=None,
-                         check_val_every_n_epoch=None,
-                         val_check_interval=self.args.training.val_check_interval)  
-        
-        trainer.fit(model=self, train_dataloaders=train_loader,
-                val_dataloaders=test_loader)
-        
-    
-    def on_fit_start(self):
         self.entropy_estimate = None
         self.mutinfo_estimate = None
         self.score_model.to(self.device)
@@ -199,3 +193,14 @@ class InfoSEDD(pl.LightningModule):
             loss = self.loss_fn_test(self.score_model, batch, cond=None).mean()
             self.ema.restore(self.score_model.parameters())
             return {"loss": loss}
+    
+    def on_validation_epoch_end(self):
+        self.ema.store(self.score_model.parameters())
+        self.ema.copy_to(self.score_model.parameters())
+        self.estimate_information_quantities(self.score_model, self.train_loader)
+        self.ema.restore(self.score_model.parameters())
+        if self.entropy_estimate is not None:
+            self.logger.experiment.add_scalar("val_entropy", self.entropy_estimate, self.global_step)
+        if self.mutinfo_estimate is not None:
+            self.logger.experiment.add_scalar("val_mutinfo", self.mutinfo_estimate, self.global_step)
+

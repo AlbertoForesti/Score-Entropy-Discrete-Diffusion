@@ -2,7 +2,7 @@
 
 defaults:
 - _self_
-- model: mlp
+- model: unetmlp
 
 estimator:
   _target_: infosedd.infosedd.InfoSEDD
@@ -34,11 +34,11 @@ estimator:
       checkpoint_dir: "infosedd/checkpoints_mlp"
       accelerator: "gpu"
       devices: 1
-      max_steps: 10001
+      max_steps: 25001
       val_check_interval: 5000
 
     graph:
-      type: absorb
+      type: uniform
       file: data
       report_all: False
 
@@ -66,4 +66,3 @@ estimator:
       beta2: 0.999
       eps: 1e-8
       warmup: 2500
-      grad_clip: 1.

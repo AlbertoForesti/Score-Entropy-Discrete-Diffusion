@@ -9,8 +9,13 @@ from torch.utils.data import Dataset
 
 class SynthetitcDataset(Dataset):
 
-    def __init__(self, data):
+    def __init__(self, data, device=None):
         self.data = data
+        self.device = device
+    
+    def set_device(self, device):
+        self.device = device
+        self.data = self.data.to(device)
 
     def __len__(self):
         return len(self.data)
@@ -24,10 +29,12 @@ def _array_to_tensor(x, dtype=torch.int64):
         raise TypeError("Input must be a numpy array or convertible to one.")
     return torch.tensor(x, dtype=dtype)
 
-def array_to_dataset(x: np.array, y: np.array):
+def array_to_dataset(x: np.array, y: np.array, device=None):
     x = _array_to_tensor(x)
     y = _array_to_tensor(y)
     data = torch.cat((x, y), dim=1)
+    if device is not None:
+        data = data.to(device)
     if data.shape[-1] == 1:
         data = data.squeeze(-1)
     dataset = SynthetitcDataset(data)
