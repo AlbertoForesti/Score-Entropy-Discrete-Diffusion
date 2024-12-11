@@ -22,7 +22,7 @@ estimator:
       checkpoint_dir: "minde/checkpoints_mlp"
       devices: 1
     inference:
-      type: "j"
+      type: "c"
       mc_iter: 10
       importance_sampling: False
       sigma: 1.0

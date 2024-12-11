@@ -2,11 +2,11 @@
 
 distribution_key: xor_n_minus_1=${distribution.n_minus_1}_p=${distribution.p}
 alphabet_size: 2
-seq_length: 3
-x_indices: [0,1]
-y_indices: [2]
+seq_length: 11
+x_indices: [0,1,2,3,4,5,6,7,8,9]
+y_indices: [10]
 
 distribution:
   _target_: infosedd.custom_rvs.XORRandomVariable
   p: 0.5
-  n_minus_1: 1
+  n_minus_1: 9
