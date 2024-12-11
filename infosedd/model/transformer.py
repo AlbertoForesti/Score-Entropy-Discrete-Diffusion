@@ -6,8 +6,6 @@ import math as math
 import time
 
 from einops import rearrange
-from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
-# from flash_attn.ops.fused_dense import FusedMLP, FusedDense
 from huggingface_hub import PyTorchModelHubMixin
 from omegaconf import OmegaConf
 
@@ -192,9 +190,6 @@ class DDiTBlock(nn.Module):
             x = self.multi_head_attn(q, k, v)[0]
         except:
             raise ValueError("Shapes: q={}, k={}, v={}".format(q.shape, k.shape, v.shape))
-        
-        """x = flash_attn_varlen_qkvpacked_func(
-            qkv, cu_seqlens, seq_len, 0., causal=False)"""
         
         x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
 

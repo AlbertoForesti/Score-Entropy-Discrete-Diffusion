@@ -26,14 +26,15 @@ dependencies = [
     "jupyter",
     "einops",
     "accelerate",
-    "flash_attn",
     "numpy==1.26.4",
     "transformers",
     "datasets",
     "mutinfo @ git+https://github.com/VanessB/mutinfo",
     "bebeziana @ git+https://github.com/VanessB/bebeziana",
     "distribution_generator @ git+https://github.com/AlbertoForesti/distribution-generator",
-    "hydra-core"
+    "minde @ git+https://github.com/AlbertoForesti/minde",
+    "hydra-core",
+    "diffusers"
 ]
 
 
