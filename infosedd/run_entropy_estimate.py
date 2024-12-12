@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--dataset", default="wikitext103", type=str)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--steps", type=int, default=1024)
-    parser.add_argument("--paths", type=int, default=100)
+    parser.add_argument("--mc_estimates", type=int, default=100)
     args = parser.parse_args()
 
     
@@ -25,7 +25,7 @@ def main():
     )
 
     estimates = []
-    for i in range(args.paths):
+    for i in range(args.mc_estimates):
         entropy = sampling_fn(model)
         estimates.append(entropy)
     

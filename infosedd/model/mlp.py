@@ -7,11 +7,7 @@ class DiffusionMLP(nn.Module):
         super(DiffusionMLP, self).__init__()
         self.sequence_length = config.seq_length
         self.absorb = config.graph.type == "absorb"
-        try:
-            vocab_size = config.alphabet_size + (1 if self.absorb else 0)
-        except:
-            vocab_size = config.tokens + (1 if self.absorb else 0)
-        self.vocab_size = vocab_size
+        self.vocab_size = config.alphabet_size + (1 if self.absorb else 0)
         self.hidden_dim = config.model.hidden_size
 
         # Define the layers

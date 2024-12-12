@@ -265,33 +265,6 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device, p=None):
     
     return sampling_fn
 
-def get_entropy_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
-    
-    sampling_fn = get_pc_sampler_for_entropy_estimate(graph=graph,
-                                                      noise=noise,
-                                                      batch_dims=batch_dims,
-                                                      predictor=config.sampling.predictor,
-                                                      steps=config.sampling.steps,
-                                                      denoise=config.sampling.noise_removal,
-                                                      vocab_size=config.alphabet_size,
-                                                      eps=eps,
-                                                      device=device,
-                                                      proj_fun=proj_fun,
-                                                      p=p,
-                                                      indeces_to_keep=indeces_to_keep)
-    
-    def estimate_entropy_fn(model):
-        estimates = []
-        for i in tqdm(range(config.paths)):
-            kl = sampling_fn(model)
-            estimates.append(kl)
-        # print("Estimates: ", estimates)
-        factor = batch_dims[1] if indeces_to_keep is None else len(indeces_to_keep)
-        print("Mean estimate: ", np.log(factor*config.alphabet_size)-np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates))
-        return np.log(factor*config.alphabet_size)-np.mean(estimates)
-    
-    return estimate_entropy_fn
-
 def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
     
     def estimate_mutinfo_fn(model, data_loader):
@@ -312,23 +285,29 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
         estimates = []
         with torch.no_grad():
             step = 0
-            for batch in tqdm(data_loader, desc="Estimating MI", total=config.paths):
-                batch = batch.to(device)
-                if step==config.paths:
-                    break
-                t = torch.rand(batch.shape[0], 1, device=device)
-                sigma, dsigma = noise(t)
-                # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
-                perturbed_batch = graph.sample_transition(batch, sigma)
-                
-                score_joint = joint_score_fn(perturbed_batch, sigma)
-                score_marginal = marginal_score_fn(perturbed_batch, sigma)
-                
-                # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
-                divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
-                estimates.append(divergence_estimate.mean().item())
-                step += 1
-        print("Mean estimate: ", np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5])
+            stop = False
+            progress_bar = tqdm(total=config.mc_estimates, desc="Estimating Mutual Information")
+            while not stop:
+                for batch in data_loader:
+                    progress_bar.update(1)
+                    batch = batch.to(device)
+                    if step==config.mc_estimates:
+                        stop = True
+                        break
+                    t = torch.rand(batch.shape[0], 1, device=device)
+                    sigma, dsigma = noise(t)
+                    # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
+                    perturbed_batch = graph.sample_transition(batch, sigma)
+                    
+                    score_joint = joint_score_fn(perturbed_batch, sigma)
+                    score_marginal = marginal_score_fn(perturbed_batch, sigma)
+                    
+                    # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
+                    divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
+                    estimates.append(divergence_estimate.mean().item())
+                    step += 1
+            progress_bar.close()
+        print("Mean estimate: ", np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5], "N estimates: ", len(estimates))
         return np.mean(estimates)
     return estimate_mutinfo_fn
 
@@ -342,9 +321,9 @@ def get_entropy_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
         estimates = []
         with torch.no_grad():
             step = 0
-            for batch in tqdm(data_loader, desc="Estimating Entropy", total=config.paths):
+            for batch in tqdm(data_loader, desc="Estimating Entropy", total=config.mc_estimates):
                 batch = batch.to(device)
-                if step==config.paths:
+                if step==config.mc_estimates:
                     break
                 if config.data.valid != "text8" and config.data.valid not in available_distributions:
                     batch = batch['input_ids'].to(device)
@@ -366,83 +345,6 @@ def get_entropy_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
         print("Mean estimate: ", np.log(config.alphabet_size**factor) - np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5])
         return np.log(config.alphabet_size**factor) - np.mean(estimates)
     return estimate_entropy_fn
-
-
-def get_mutinfo_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
-    
-    sampling_fn = get_pc_sampler_for_mutinfo_estimate(graph=graph,
-                                                      noise=noise,
-                                                      batch_dims=batch_dims,
-                                                      predictor=config.sampling.predictor,
-                                                      steps=config.sampling.steps,
-                                                      denoise=config.sampling.noise_removal,
-                                                      vocab_size=config.alphabet_size,
-                                                      eps=eps,
-                                                      device=device,
-                                                      proj_fun=proj_fun,
-                                                      p=p,
-                                                      indeces_to_keep=indeces_to_keep)
-    
-    def estimate_mutinfo_fn(model):
-        estimates = []
-        for i in tqdm(range(config.paths)):
-            kl = sampling_fn(model)
-            estimates.append(kl)
-        # print("Estimates: ", estimates)
-        print("Mean estimate: ", np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates))
-        return np.mean(estimates)
-    
-    return estimate_mutinfo_fn
-
-def get_entropy_montecarlo_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None):
-        
-        def estimate_entropy_fn(model, eval_loader):
-            predictor = get_predictor(config.sampling.predictor)(graph, noise)
-            if p is None:
-                score_fn = mutils.get_score_fn(model, train=False, sampling=True)
-            else:
-                score_fn = lambda x, sigma: graph.get_analytic_score(x, p, sigma)
-
-            n = int(1/eps)
-
-            index_hist = torch.zeros(n, device=device)
-            
-            with torch.no_grad():
-                step = 0
-                estimates = []
-                for batch in tqdm(eval_loader, desc="Estimating Entropy", total=config.paths):
-                    if step==config.paths:
-                        break
-                    if config.data.valid != "text8" and config.data.valid not in available_distributions:
-                        batch = batch['input_ids'].to(device)
-                    else:
-                        if config.data.valid in available_distributions:
-                            batch = batch["feature"].to(device)
-                        else:
-                            batch = batch.to(device)
-                    time_indeces = torch.randint(1, n+1, (batch.shape[0],), device=device)
-                    counts = torch.bincount(time_indeces, minlength=n+1)
-                    # unique_indeces_number = torch.unique(time_indeces).shape[0]
-                    # print(f"n: {n}, Counts shape: {counts.shape}, index_hist shape: {index_hist.shape}, time indices max: {time_indeces.max()}, time indices min: {time_indeces.min()}, unique indeces number: {unique_indeces_number}")
-                    index_hist += counts[1:] # Because we don't have zeros
-                    t = time_indeces/n
-                    sigma, dsigma = noise(t)
-                    # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
-                    perturbed_batch = graph.sample_transition(batch, sigma[:, None])
-                    ratio = predictor.get_ratio_with_uniform(score_fn, perturbed_batch, t, eps)
-                    estimates.append(torch.log(ratio).mean().item())
-                    if step % 100 == 0:
-                        print(sigma[:5])
-                        print(t[:5])
-                        kl = n*np.mean(estimates)
-                        h = np.log(config.tokens*batch_dims[1]) - kl
-                        tqdm.write(f"Entropy estimate: {h}, kl: {kl}, kl unnormalised {np.mean(estimates)}")
-                    step += 1
-                print(f"Entropy estimate: {np.log(config.tokens*batch_dims[1])-n*np.mean(estimates)}")
-                print(f"Index probabilities: {index_hist/torch.sum(index_hist)}, with variance {torch.var(index_hist/torch.sum(index_hist))}")
-                return np.log(config.tokens*batch_dims[1])-n*np.mean(estimates)
-                    
-        return estimate_entropy_fn
 
 def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, p=None):
     predictor = get_predictor(predictor)(graph, noise)
@@ -474,104 +376,3 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
         return x
     
     return pc_sampler
-
-
-def get_pc_sampler_for_entropy_estimate(graph, noise, batch_dims, predictor, steps, vocab_size, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, indeces_to_keep=None, p=None):
-    predictor = get_predictor(predictor)(graph, noise)
-    projector = proj_fun
-
-    @torch.no_grad()
-    def pc_sampler(model):
-        if p is None:
-            sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True)
-        else:
-            sampling_score_fn = lambda x, sigma: graph.get_analytic_score(x, p, sigma)
-        x = graph.sample_limit(*batch_dims).to(device)
-        timesteps = torch.linspace(1, eps, steps + 1, device=device)
-        dt = (1 - eps) / steps
-        log_radon_sum = 0
-
-        for i in range(steps):
-            t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
-            x = projector(x)
-            ratio = predictor.get_ratio_with_uniform(sampling_score_fn, x, t, dt, proj_fn=projector, indeces_to_keep=indeces_to_keep)
-            # raise UserWarning(f"Shapes were {x.shape}, {t.shape}, {dt}, {ratio.shape}")
-            # print("ratio is", ratio[:5]) are all around 2
-            # print("log ratio is", torch.log(ratio)[:5])
-            log_radon_sum = log_radon_sum + torch.log(ratio)
-            x = predictor.update_fn(sampling_score_fn, x, t, dt)
-        
-        # print("Log Radon sum: ", log_radon_sum)
-        return torch.mean(log_radon_sum).item()
-    
-    return pc_sampler
-
-
-def get_pc_sampler_for_mutinfo_estimate(graph, noise, batch_dims, predictor, steps, vocab_size, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, indeces_to_keep=None, p=None):
-    predictor = get_predictor(predictor)(graph, noise)
-    projector = proj_fun
-
-    @torch.no_grad()
-    def pc_sampler(model):
-        if p is None:
-            sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True)
-        else:
-            joint_score_fn = lambda x, sigma: graph.get_analytic_score(x, p, sigma)
-            px = torch.sum(p, axis=1)
-            py = torch.sum(p, axis=0)
-            # print("PX: ", px)
-            # print("PY: ", py)
-            # print("PXY: ", p)
-            pxy_margin = px * py.T
-            # print("PXY is_marginal: ", pxy_margin)
-            pxy_margin = pxy_margin.unsqueeze(-1)
-            marginal_score_fn = lambda x, sigma: graph.get_analytic_score(x, pxy_margin, sigma)
- 
-        x = graph.sample_limit(*batch_dims).to(device)
-        timesteps = torch.linspace(1, eps, steps + 1, device=device)
-        dt = (1 - eps) / steps
-        log_radon_sum = 0
-
-        for i in range(steps):
-            t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
-            x = projector(x)
-            ratio = predictor.get_ratio_with_marginal(joint_score_fn, marginal_score_fn, x, t, dt, proj_fn=projector, indeces_to_keep=indeces_to_keep)
-            
-            # raise UserWarning(f"Shapes were {x.shape}, {t.shape}, {dt}, {ratio.shape}")
-            # print("ratio is", ratio[:5]) are all around 2
-            # print("log ratio is", torch.log(ratio)[:5])
-            log_radon_sum = log_radon_sum + torch.log(ratio)
-            x = predictor.update_fn(joint_score_fn, x, t, dt)
-        
-        # print("Log Radon sum: ", log_radon_sum)
-        return torch.mean(log_radon_sum).item()
-    
-    return pc_sampler
-
-
-"""def get_pc_sampler_for_mutinfo_estimate(graph, noise, batch_dims, predictor, steps, vocab_size, vocab_indices, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x):
-    predictor = get_predictor(predictor)(graph, noise)
-    projector = proj_fun
-    
-    @torch.no_grad()
-    def pc_sampler(model):
-        sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True)
-        x = graph.sample_limit(*batch_dims).to(device)
-        timesteps = torch.linspace(1, eps, steps + 1, device=device)
-        dt = (1 - eps) / steps
-        log_radon_sum = 0
-
-        for i in range(steps):
-            t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
-            x = projector(x)
-            ratio = predictor.get_ratio_with_uniform(sampling_score_fn, x, t, dt, projector)
-            log_ratio = log_ratio + torch.log(ratio)
-            # print("ratio is", ratio[:5]) are all around 2
-            # print("log ratio is", torch.log(ratio)[:5])
-            log_radon_sum = log_radon_sum + log_ratio
-            x = predictor.update_fn(sampling_score_fn, x, t, dt)
-        
-        # print("Log Radon sum: ", log_radon_sum)
-        return torch.mean(log_radon_sum).item()
-    
-    return pc_sampler"""
