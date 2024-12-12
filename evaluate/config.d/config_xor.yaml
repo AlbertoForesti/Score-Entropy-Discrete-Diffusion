@@ -7,6 +7,9 @@ to_be_seeded:
 
 default_grid:
   dimensionality: range(1, 4)
+  n_minus_1: range(1, 10)
+  n_minus_1_large: range(10, 100, 10)
+  n_minus_1_huge: range(100, 1000, 100)
 
 hydra:
   mode: MULTIRUN
@@ -17,3 +20,4 @@ hydra:
     max_batch_size: 100 # Makes startup faster, see https://github.com/facebookresearch/hydra/issues/1324.
     params:
       ++n_samples: 10000
+      ++distribution.n_minus_1: ${default_grid.n_minus_1}

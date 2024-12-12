@@ -50,11 +50,8 @@ def run_test(config : DictConfig) -> None:
         results = {}
         results["mutual_information"] = {"values": []}
         alphabet_size = config["alphabet_size"]
-        x_indices = config["x_indices"]
-        y_indices = config["y_indices"]
-        OmegaConf.update(config, "estimator.args.alphabet_size", alphabet_size, force_add=True)
-        OmegaConf.update(config, "estimator.args.mutinfo_config.x_indices", x_indices, force_add=True) # These two lines break
-        OmegaConf.update(config, "estimator.args.mutinfo_config.y_indices", y_indices, force_add=True)
+        if hasattr(config["estimator"], "args"):
+            OmegaConf.update(config, "estimator.args.alphabet_size", alphabet_size, force_add=True)
 
         for index in trange(config["n_runs"]):
             random_variable = instantiate(config["distribution"])

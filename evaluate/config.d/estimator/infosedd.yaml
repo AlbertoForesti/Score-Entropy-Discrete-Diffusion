@@ -9,7 +9,7 @@ estimator:
   args:
     model: ${model}
     ngpus: 1
-    paths: 1000
+    mc_estimates: 1000
     estimate_entropy: False
     estimate_mutinfo: True
     mc_times: 100
@@ -31,14 +31,14 @@ estimator:
       weight: standard
       snapshot_sampling: True
       ema: 0.999
-      checkpoint_dir: "infosedd/checkpoints_mlp"
+      checkpoint_dir: "infosedd/checkpoints"
       accelerator: "gpu"
       devices: 1
       max_steps: 25001
       val_check_interval: 5000
 
     graph:
-      type: uniform
+      type: absorb
       file: data
       report_all: False
 
@@ -64,5 +64,6 @@ estimator:
       lr: 1e-2
       beta1: 0.9
       beta2: 0.999
-      eps: 1e-8
+      eps: 1e-3
       warmup: 2500
+      gradient_clip_val: 1.0

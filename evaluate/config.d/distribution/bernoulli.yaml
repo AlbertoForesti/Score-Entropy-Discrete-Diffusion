@@ -3,8 +3,6 @@
 distribution_key: X_dim=${distribution.dim_x}__Y_dim=${distribution.dim_y}
 alphabet_size: 2
 seq_length: 2
-x_indices: [0]
-y_indices: [1]
 
 distribution:
   _target_: distribution_generator.distributions.get_rv
