@@ -2,11 +2,14 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
-from infosedd import graph_lib
 import math
 
-from infosedd.model import utils as mutils
-from infosedd.utils import statistics_batch
+try:
+    from infosedd.model import utils as mutils
+    from infosedd.utils import statistics_batch
+except:
+    from model import utils as mutils
+    from utils import statistics_batch
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -33,7 +36,7 @@ def compute_density_for_timestep_sampling(
     return u
 
 
-def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mutinfo_config=None, marginal_score_fn = None, joint_score_fn = None):
+def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mutinfo_config=None, marginal_score_fn = None, joint_score_fn = None, p_marginal=0.5):
 
     def loss_fn(model, batch, cond=None, t=None, perturbed_batch=None):
         """
@@ -55,12 +58,13 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mutinfo_config
         marginal_step = False
 
         if mutinfo_config is not None:
-            marginal_step = np.random.rand() < 0.5
+            marginal_step = np.random.rand() < p_marginal
             if marginal_step:
                 var_y_indices = list(mutinfo_config['y_indices'])
                 device = batch.device
                 batch = batch.cpu().numpy()
                 random_batch_permutation = np.random.permutation(batch.shape[0])
+
                 shuffled_values = batch[random_batch_permutation[:, None], var_y_indices]
             
                 # Update the batch with the shuffled values
@@ -68,27 +72,16 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mutinfo_config
                 batch = torch.tensor(batch, device=device)
         if perturbed_batch is None:
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
+            if np.random.rand() < 1e-3:
+                did_not_change = perturbed_batch == batch
+                did_not_change = did_not_change.cpu().numpy()
+                did_not_change = np.bitwise_and.reduce(did_not_change, axis=-1)
+                print(f"Did not change: {did_not_change.sum() / did_not_change.shape[0]}")
         
         # print("2 - Batch example: ", batch[0])
 
         log_score_fn = mutils.get_score_fn(model, train=train, sampling=False, is_marginal=marginal_step)
         log_score = log_score_fn(perturbed_batch, sigma)
-
-        """if np.random.rand() < 1e-2:
-            if marginal_step:
-                if marginal_score_fn is None:
-                    score_analytic = None
-                else:
-                    score_analytic = marginal_score_fn(perturbed_batch, sigma)
-            else:
-                if joint_score_fn is None:
-                    score_analytic = None    
-                else:
-                    score_analytic = joint_score_fn(perturbed_batch, sigma)
-            print(f"Score example - Marginal-{marginal_step}:\n x: {perturbed_batch[0]}\n x0: {batch[0]}\n Estimated score: {log_score[0].exp()}\n True score: {score_analytic[0]}\n t: {t[0]}")
-            print(f"Mean Absolute Error: {torch.abs(log_score.exp() - score_analytic).mean()}")
-            print(f"Mean Absolute Error with marginal: {torch.abs(log_score.exp() - marginal_score_fn(perturbed_batch, sigma)).mean()}")"""
-        
         
         loss = graph.score_entropy(log_score, sigma[:, None], perturbed_batch, batch)
 

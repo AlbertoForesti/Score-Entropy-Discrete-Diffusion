@@ -2,12 +2,16 @@ import abc
 import torch
 import torch.nn.functional as F
 import numpy as np
-from infosedd.catsample import sample_categorical
-from functools import partial
-from scipy.linalg import expm
 
-from infosedd.model import utils as mutils
 from tqdm import tqdm
+
+try:
+    from infosedd.model import utils as mutils
+    from infosedd.catsample import sample_categorical
+except:
+    from model import utils as mutils
+    from catsample import sample_categorical
+
 
 _PREDICTORS = {}
 
@@ -321,29 +325,39 @@ def get_entropy_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
         estimates = []
         with torch.no_grad():
             step = 0
-            for batch in tqdm(data_loader, desc="Estimating Entropy", total=config.mc_estimates):
-                batch = batch.to(device)
-                if step==config.mc_estimates:
-                    break
-                if config.data.valid != "text8" and config.data.valid not in available_distributions:
-                    batch = batch['input_ids'].to(device)
-                else:
-                    if config.data.valid in available_distributions:
-                        batch = batch["feature"].to(device)
-                    else:
-                        batch = batch.to(device)
-                t = torch.rand(batch.shape[0], 1, device=device)
-                sigma, dsigma = noise(t)
-                # raise UserWarning(f"t is {t[:5]}, sigma is {sigma[:5]}, batch shape is {batch.shape}")
-                perturbed_batch = graph.sample_transition(batch, sigma)
-                # raise UserWarning(f"Perturbed batch is {perturbed_batch[:5]}")
-                score = score_fn(perturbed_batch, sigma)
-                divergence_estimate = graph.score_logprobability(score, dsigma, perturbed_batch).mean().item()
-                estimates.append(divergence_estimate)
-                step += 1
-        factor = config.tokens if indeces_to_keep is None else len(indeces_to_keep)
-        print("Mean estimate: ", np.log(config.alphabet_size**factor) - np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5])
-        return np.log(config.alphabet_size**factor) - np.mean(estimates)
+            stop = False
+            progress_bar = tqdm(total=config.mc_estimates, desc="Estimating Entropy")
+            while not stop:
+                for batch in data_loader:
+                    progress_bar.update(1)
+                    batch = batch.to(device)
+                    if step==config.mc_estimates:
+                        stop = True
+                        break
+                    t = torch.rand(batch.shape[0], 1, device=device)
+                    sigma, dsigma = noise(t)
+                    # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
+                    perturbed_batch = graph.sample_transition(batch, sigma)
+
+                    if hasattr(config, 'conditioning_indices') and config.conditioning_indices is not None:
+                        indeces_to_keep = config.conditioning_indices
+                        perturbed_batch[:, indeces_to_keep] = batch[:, indeces_to_keep]
+                    
+                    score = score_fn(perturbed_batch, sigma)
+
+                    if hasattr(config, 'conditioning_indices') and config.conditioning_indices is not None:
+                        indeces_to_keep = config.conditioning_indices
+                        score = score[:, indeces_to_keep]
+                        perturbed_batch = perturbed_batch[:, indeces_to_keep]
+                    
+                    # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
+                    divergence_estimate = graph.score_logprobability(score, dsigma, perturbed_batch)
+                    estimates.append(divergence_estimate.mean().item())
+                    step += 1
+            progress_bar.close()
+        factor = config.seq_length if indeces_to_keep is None else len(indeces_to_keep)
+        print("Mean estimate: ", factor*np.log(config.alphabet_size) - np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5])
+        return factor*np.log(config.alphabet_size) - np.mean(estimates)
     return estimate_entropy_fn
 
 def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, p=None):
@@ -361,7 +375,7 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
 
-        for i in range(steps):
+        for i in tqdm(range(steps), desc="Sampling"):
             t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
             x = projector(x)
             x = predictor.update_fn(sampling_score_fn, x, t, dt)

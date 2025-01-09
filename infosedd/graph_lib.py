@@ -4,18 +4,34 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import custom_fwd, custom_bwd
-from infosedd.utils import cartesian_power
-from infosedd.utils import statistics_batch
 
-from infosedd.catsample import sample_categorical
+try:
+    from infosedd.utils import cartesian_power
+    from infosedd.utils import statistics_batch
+
+    from infosedd.catsample import sample_categorical
+except:
+    from utils import cartesian_power
+    from utils import statistics_batch
+
+    from catsample import sample_categorical
 
 def get_graph(config, device):
-    if config.graph.type == "uniform":
-        return Uniform(config.alphabet_size)
-    elif config.graph.type == "absorb":
-        return Absorbing(config.alphabet_size)
-    else:
-        raise ValueError(f"Graph {config.graph.type} not valid")
+    try:
+        if config.graph.type == "uniform":
+            return Uniform(config.alphabet_size)
+        elif config.graph.type == "absorb":
+            return Absorbing(config.alphabet_size)
+        else:
+            raise ValueError(f"Graph {config.graph.type} not valid")
+    except:
+        if config.graph.type == "uniform":
+            return Uniform(50257)
+        elif config.graph.type == "absorb":
+            return Absorbing(50257)
+        else:
+            raise ValueError(f"Graph {config.graph.type} not valid")
+
 
 
 def unsqueeze_as(x, y, back=True):
@@ -474,6 +490,9 @@ class Absorbing(Graph):
             torch.expm1(sigma),
             torch.exp(sigma) - 1
         )
+
+        # raise UserWarning(f"Devices: {esigm1.device}, {x.device}, {x0.device}, {rel_ind.device}, {score.device}")
+        # raise UserWarning(f"Dimensions: {score.shape}, {esigm1.shape}, {rel_ind.shape}, {x0.shape}, {x.shape}, rel_ind={rel_ind}")
 
         ratio = 1 / esigm1.expand_as(x)[rel_ind]
         other_ind = x0[rel_ind]

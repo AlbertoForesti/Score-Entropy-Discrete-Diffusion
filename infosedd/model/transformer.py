@@ -2,14 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import math as math
-import time
+import math
 
 from einops import rearrange
+from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+# from flash_attn.ops.fused_dense import FusedMLP, FusedDense
 from huggingface_hub import PyTorchModelHubMixin
 from omegaconf import OmegaConf
-
-from infosedd.utils import statistics_batch
 
 from . import rotary
 from .fused_add_dropout_scale import (
@@ -80,7 +79,6 @@ class TimestepEmbedder(nn.Module):
         """
         # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         half = dim // 2
-        # raise UserWarning(f"tmp shape is {tmp.shape}, t shape is {t.shape}, tmp device is {tmp.device}, t device is {t.device}")
         freqs = torch.exp(
             -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
         ).to(device=t.device)
@@ -105,7 +103,7 @@ class LabelEmbedder(nn.Module):
         self.embedding_table = nn.Embedding(num_classes + 1, cond_size)
         self.num_classes = num_classes
 
-        # TODO think of initializing with 0.02 std deviation like in original smiaottolo DiT paper
+        # TODO think of initializing with 0.02 std deviation like in original DiT paper
 
     def forward(self, labels):
         embeddings = self.embedding_table(labels)
@@ -113,7 +111,7 @@ class LabelEmbedder(nn.Module):
     
 
 #################################################################################
-#                                 Core Pasta                                   #
+#                                 Core Model                                    #
 #################################################################################
 
 
@@ -143,8 +141,6 @@ class DDiTBlock(nn.Module):
         self.adaLN_modulation.weight.data.zero_()
         self.adaLN_modulation.bias.data.zero_()
 
-        self.multi_head_attn = nn.MultiheadAttention(64, 2, dropout=dropout)
-
 
     def _get_bias_dropout_scale(self):
         return (
@@ -170,6 +166,7 @@ class DDiTBlock(nn.Module):
         qkv = rearrange(qkv, 'b s (three h d) -> b s three h d', three=3, h=self.n_heads)
         with torch.cuda.amp.autocast(enabled=False):
             cos, sin = rotary_cos_sin
+            # raise UserWarning(f"Shapes are {qkv.shape}, {cos.shape}, {sin.shape}")
             qkv = rotary.apply_rotary_pos_emb(
                 qkv, cos.to(qkv.dtype), sin.to(qkv.dtype)
             )
@@ -181,15 +178,8 @@ class DDiTBlock(nn.Module):
             )
         else:
             cu_seqlens = seqlens.cumsum(-1)
-        
-        q = qkv[:,0,:,:]
-        k = qkv[:,1,:,:]
-        v = qkv[:,2,:,:]
-
-        try:
-            x = self.multi_head_attn(q, k, v)[0]
-        except:
-            raise ValueError("Shapes: q={}, k={}, v={}".format(q.shape, k.shape, v.shape))
+        x = flash_attn_varlen_qkvpacked_func(
+            qkv, cu_seqlens, seq_len, 0., causal=False)
         
         x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
 
@@ -199,23 +189,7 @@ class DDiTBlock(nn.Module):
         x = bias_dropout_scale_fn(self.mlp(modulate_fused(self.norm2(x), shift_mlp, scale_mlp)), None, gate_mlp, x, self.dropout)
         return x
 
-class DoubleEmbeddingLayer(nn.Module):
-    def __init__(self, dim, vocab_dim):
-        """
-        Mode arg: 0 -> use a learned layer, 1 -> use eigenvectors, 
-        2-> add in eigenvectors, 3 -> use pretrained embedding matrix
-        """
-        super().__init__()
-        self.embedding_joint = nn.Parameter(torch.empty((vocab_dim, dim)))
-        self.embedding_marginal = nn.Parameter(torch.empty((vocab_dim, dim)))
-        torch.nn.init.kaiming_uniform_(self.embedding_joint, a=math.sqrt(5))
-        torch.nn.init.kaiming_uniform_(self.embedding_marginal, a=math.sqrt(5))
 
-    def forward(self, x, is_marginal=True):
-        if not is_marginal:
-            return self.embedding_joint[x]
-        else:
-            return self.embedding_marginal[x]
 
 class EmbeddingLayer(nn.Module):
     def __init__(self, dim, vocab_dim):
@@ -227,9 +201,9 @@ class EmbeddingLayer(nn.Module):
         self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
         torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
 
-    def forward(self, x, is_marginal=True):
+    def forward(self, x):
         return self.embedding[x]
-        
+
 
 class DDitFinalLayer(nn.Module):
     def __init__(self, hidden_size, out_channels, cond_dim):
@@ -262,10 +236,17 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         self.config = config
 
         self.absorb = config.graph.type == "absorb"
-        vocab_size = config.alphabet_size + (1 if self.absorb else 0)
-
+        try:
+            vocab_size = config.alphabet_size + (1 if self.absorb else 0)
+        except:
+            vocab_size = config.tokens + (1 if self.absorb else 0)
+        
         self.vocab_embed = EmbeddingLayer(config.model.hidden_size, vocab_size)
         self.sigma_map = TimestepEmbedder(config.model.cond_dim)
+        self.marginal_flag_map = TimestepEmbedder(config.model.cond_dim)
+
+        self.marginal_block = DDiTBlock(config.model.hidden_size, config.model.n_heads, config.model.cond_dim, dropout=config.model.dropout)
+        # raise UserWarning(f"Config model is {config.model}")
         self.rotary_emb = rotary.Rotary(config.model.hidden_size // config.model.n_heads)
 
         self.blocks = nn.ModuleList([
@@ -285,14 +266,19 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
 
 
     def forward(self, indices, sigma, is_marginal=False):
-        # statistics_batch(indices)
-        x = self.vocab_embed(indices, is_marginal=is_marginal)
+        x = self.vocab_embed(indices)
 
         c = F.silu(self.sigma_map(sigma))
 
+        marginal_flag = torch.ones_like(sigma) if is_marginal else -torch.ones_like(sigma)
+        d = F.silu(self.marginal_flag_map(marginal_flag))
+
+        # raise UserWarning(f"d datatype is {d.dtype}, c datatype is {c.dtype}")
+
         rotary_cos_sin = self.rotary_emb(x)
 
-        with torch.cuda.amp.autocast(dtype=torch.float16):
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            x = self.marginal_block(x, rotary_cos_sin, d, seqlens=None)
             for i in range(len(self.blocks)):
                 x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
 
@@ -302,12 +288,7 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
             assert self.absorb, "Haven't configured this to work."
             esigm1_log = torch.where(sigma < 0.5, torch.expm1(sigma), sigma.exp() - 1).log().to(x.dtype)[:, None, None]
             x = x - esigm1_log - np.log(x.shape[-1] - 1)# this will be approximately averaged at 0
-        
-        # print("Shape before scatter operation: ", x.shape)
-
+            
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
-
-        # print("Output shape of model: ", x.shape)
-        # print("Shape of indices: ", indices.shape)
 
         return x

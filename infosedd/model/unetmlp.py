@@ -195,8 +195,8 @@ class UnetMLP_simple(nn.Module):
 
         self.proj = nn.Linear(init_dim, self.vocab_size*self.sequence_length)
 
-        self.proj.weight.data.fill_(0.0)
-        self.proj.bias.data.fill_(0.0)
+        # self.proj.weight.data.fill_(0.0)
+        # self.proj.bias.data.fill_(0.0)
 
         self.final_lin = nn.Sequential(
             nn.GroupNorm(self.resnet_block_groups, init_dim),
@@ -212,7 +212,7 @@ class UnetMLP_simple(nn.Module):
         try:        
             x = self.init_lin(x.float())
         except:
-            raise UserWarning(f"x shape {x.shape} x.float() shape {x.float().shape} sigma shape {sigma.shape}m init_lim input dim {self.init_lin.in_features}")
+            raise UserWarning(f"x shape {x.shape} x.float() shape {x.float().shape} sigma shape {sigma.shape} init_lim input dim {self.init_lin.in_features}")
 
         r = x.clone()
 

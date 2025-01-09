@@ -29,14 +29,26 @@ def _array_to_tensor(x, dtype=torch.int64):
         raise TypeError("Input must be a numpy array or convertible to one.")
     return torch.tensor(x, dtype=dtype)
 
-def array_to_dataset(x: np.array, y: np.array, device=None):
-    x = _array_to_tensor(x)
+def array_to_dataset(*args, device=None):
+    """x = _array_to_tensor(x)
     y = _array_to_tensor(y)
     data = torch.cat((x, y), dim=1)
     if device is not None:
         data = data.to(device)
     if data.shape[-1] == 1:
+        data = data.squeeze(-1)"""
+    variables = []
+    for variable in args:
+        variable = _array_to_tensor(variable)
+        variables.append(variable)
+    data = torch.cat(tuple(variables), dim=1)
+    if device is not None:
+        data = data.to(device)
+    if data.shape[-1] == 1:
         data = data.squeeze(-1)
+    if len(data.shape) > 2:
+        data = data.reshape(data.shape[0], -1)
+    # raise UserWarning(f"Data shape: {data.shape}")
     dataset = SynthetitcDataset(data)
     return dataset
 

@@ -23,3 +23,12 @@ class XORRandomVariable(multi_rv_frozen):
         X = np.concatenate([X, X_xor], axis=1)
         
         return X, Y
+
+class IsingLoaderRandomVariable:
+
+    def __init__(self, path):
+        self.values = np.load(path)
+        self.values[self.values == -1] = 0
+    
+    def rvs(self, size=None, random_state=None):
+        return self.values[:size]

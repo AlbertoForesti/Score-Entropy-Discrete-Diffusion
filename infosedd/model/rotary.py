@@ -37,8 +37,18 @@ def rotate_half(x):
 
 @torch.jit.script
 def _apply_rotary_pos_emb_torchscript(qkv, cos, sin):
+    # raise UserWarning(f"Shapes are {qkv.shape}, {cos.shape}, {sin.shape}")
     return (qkv * cos) + (rotate_half(qkv) * sin)
 
 
 def apply_rotary_pos_emb(qkv, cos, sin):
-    return _apply_rotary_pos_emb_torchscript(qkv, cos, sin)
+    try:
+        import flash_attn.layers.rotary
+        cos = cos[0,:,0,0,:cos.shape[-1]//2]
+        sin = sin[0,:,0,0,:sin.shape[-1]//2]
+        # raise UserWarning(f"Shapes are {qkv.shape}, {cos.shape}, {sin.shape}, device are {qkv.device}, {cos.device}, {sin.device}")
+        return flash_attn.layers.rotary.apply_rotary_emb_qkv_(
+            qkv, cos, sin
+        )
+    except:
+        return _apply_rotary_pos_emb_torchscript(qkv, cos, sin)
