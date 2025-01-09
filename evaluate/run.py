@@ -58,6 +58,10 @@ def run_test(config : DictConfig) -> None:
             estimator       = instantiate(config["estimator"])
 
             x, y = random_variable.rvs(config["n_samples"])
+            
+            x = x.reshape(config["n_samples"], -1)
+            y = y.reshape(config["n_samples"], -1)
+            
             results["mutual_information"]["values"].append(estimator(x, y))
             torch.cuda.empty_cache()
 

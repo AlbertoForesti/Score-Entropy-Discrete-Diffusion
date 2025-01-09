@@ -2,14 +2,14 @@
 
 defaults:
 - _self_
-- model: unetmlp
+- model: nano_d2
 
 estimator:
   _target_: infosedd.infosedd.InfoSEDD
   args:
     model: ${model}
     ngpus: 1
-    mc_estimates: 1000
+    mc_estimates: 100
     estimate_entropy: False
     estimate_mutinfo: True
     mc_times: 100
@@ -17,12 +17,15 @@ estimator:
     montecarlo: False
     dynkin: True
     use_analytic_score: False
-    debug: False
+    debug: True
+    generate_samples: True
+    resume_training: True
+    checkpoint_path: null
 
     cond: null
 
     training:
-      batch_size: 512
+      batch_size: 256
       accum: 1
       snapshot_freq: 5000
       log_freq: 50
@@ -30,12 +33,13 @@ estimator:
       snapshot_freq_for_preemption: 10000
       weight: standard
       snapshot_sampling: True
-      ema: 0.999
+      ema: 0.9999
       checkpoint_dir: "infosedd/checkpoints"
       accelerator: "gpu"
       devices: 1
-      max_steps: 25001
+      max_steps: 50001
       val_check_interval: 5000
+      p_marginal: 0.5
 
     graph:
       type: absorb
@@ -44,7 +48,7 @@ estimator:
 
     noise:
       type: loglinear
-      sigma_min: 1e-4
+      sigma_min: 1e-5
       sigma_max: 20
 
     sampling:
@@ -61,9 +65,9 @@ estimator:
     optim:
       weight_decay: 0
       optimizer: AdamW
-      lr: 1e-2
+      lr: 3e-4
       beta1: 0.9
       beta2: 0.999
-      eps: 1e-3
-      warmup: 2500
+      eps: 1e-8
+      warmup: 1_000
       gradient_clip_val: 1.0

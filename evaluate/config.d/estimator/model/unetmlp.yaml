@@ -3,8 +3,7 @@ type: ddit
 dropout: 0     # Keeping dropout the same
 resnet_block_groups: 8
 sigma_dim: 32
-init_dim: 32
-length: 6
+init_dim: 128
 dim_mults:
   - 1
   - 1
