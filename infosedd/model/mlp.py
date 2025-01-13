@@ -22,8 +22,8 @@ class DiffusionMLP(nn.Module):
 
         # Pass through the MLP
         # raise UserWarning(f"x shape is {x.shape}: {x}")
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = F.leaky_relu(self.fc1(x))
+        x = F.leaky_relu(self.fc2(x))
         x = self.fc3(x)
 
         # Reshape the output to (batch_size, sequence_length, num_tokens)

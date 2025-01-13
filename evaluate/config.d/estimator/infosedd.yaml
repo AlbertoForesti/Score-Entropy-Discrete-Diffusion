@@ -25,7 +25,7 @@ estimator:
     cond: null
 
     training:
-      batch_size: 256
+      batch_size: 1024
       accum: 1
       snapshot_freq: 5000
       log_freq: 50
@@ -33,7 +33,7 @@ estimator:
       snapshot_freq_for_preemption: 10000
       weight: standard
       snapshot_sampling: True
-      ema: 0.9999
+      ema: 0.999
       checkpoint_dir: "infosedd/checkpoints"
       accelerator: "gpu"
       devices: [2]
@@ -58,14 +58,14 @@ estimator:
       eps: 1e-5
 
     eval:
-      batch_size: 512
+      batch_size: 1024
       perplexity: True
       perplexity_batch_size: 32
 
     optim:
       weight_decay: 0
       optimizer: AdamW
-      lr: 3e-4
+      lr: 5e-3
       beta1: 0.9
       beta2: 0.999
       eps: 1e-8

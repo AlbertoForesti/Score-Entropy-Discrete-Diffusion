@@ -1,4 +1,0 @@
-name: mlp
-type: ddit
-hidden_size: 512  # Reduced hidden size due to simpler data
-scale_by_sigma: False

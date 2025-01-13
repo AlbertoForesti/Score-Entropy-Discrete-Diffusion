@@ -1,9 +1,0 @@
-name: nano
-type: ddit
-hidden_size: 64  # Reduced hidden size due to simpler data
-cond_dim: 16     # Reduced conditional dimension
-length: 3
-n_blocks: 2      # Fewer blocks due to simpler data
-n_heads: 1       # Only one head since the data is very simple
-scale_by_sigma: False
-dropout: 0.1     # Keeping dropout the same

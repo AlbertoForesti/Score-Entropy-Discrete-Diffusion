@@ -317,6 +317,15 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
                     score_marginal_y = score_marginal_y[:, y_indices]
 
                     score_marginal = torch.cat([score_marginal_x, score_marginal_y], dim=1)
+
+                    score_marginal = torch.where(torch.isnan(score_marginal), torch.ones_like(score_marginal), score_marginal)
+                    score_joint = torch.where(torch.isnan(score_joint), torch.ones_like(score_joint), score_joint)
+
+                    score_marginal = torch.where(torch.isinf(score_marginal), torch.ones_like(score_marginal), score_marginal)
+                    score_joint = torch.where(torch.isinf(score_joint), torch.ones_like(score_joint), score_joint)
+
+                    score_marginal = torch.where(score_marginal<1e-5, 1e-5*torch.ones_like(score_marginal), score_marginal)
+                    score_joint = torch.where(score_joint<1e-5, 1e-5*torch.ones_like(score_joint), score_joint)
                     
                     # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
                     divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
