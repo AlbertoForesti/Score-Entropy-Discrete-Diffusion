@@ -218,7 +218,12 @@ class InfoSEDD(pl.LightningModule):
         self.sampling_shape = (self.args.training.batch_size // (self.args.ngpus * self.args.training.accum), seq_length)
         self.sampling_fn = sampling.get_sampling_fn(self.args, graph, noise, self.sampling_shape, sampling_eps, device, p)
         self.entropy_estimate_dynkin_fn = sampling.get_entropy_dynkin_estimate_fn(self.args, graph, noise, self.sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
-        self.mutinfo_estimate_dynkin_fn = sampling.get_mutinfo_dynkin_estimate_fn(self.args, graph, noise, self.sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
+        try:
+            x_indices = self.mutinfo_config["x_indices"]
+            y_indices = self.mutinfo_config["y_indices"]
+        except:
+            raise UserWarning(f"Mutual information config is {self.mutinfo_config}")
+        self.mutinfo_estimate_dynkin_fn = sampling.get_mutinfo_dynkin_estimate_fn(self.args, graph, noise, self.sampling_shape, sampling_eps, device, x_indices, y_indices, p, proj_fun, indeces_to_keep)
 
         self.noise = noise
         self.graph = graph

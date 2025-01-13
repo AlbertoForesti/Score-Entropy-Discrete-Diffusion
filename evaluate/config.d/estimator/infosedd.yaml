@@ -47,9 +47,9 @@ estimator:
       report_all: False
 
     noise:
-      type: loglinear
+      type: geometric
       sigma_min: 1e-5
-      sigma_max: 20
+      sigma_max: 1
 
     sampling:
       predictor: euler

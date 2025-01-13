@@ -269,12 +269,11 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device, p=None):
     
     return sampling_fn
 
-def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
+def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device, x_indices, y_indices, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
     
     def estimate_mutinfo_fn(model, data_loader):
         if p is None:
-            joint_score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
-            marginal_score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=True)
+            score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
         else:
             joint_score_fn = lambda x, s: graph.get_analytic_score(x, p, s)
             px = torch.sum(p, axis=1)
@@ -303,8 +302,21 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
                     # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
                     perturbed_batch = graph.sample_transition(batch, sigma)
                     
-                    score_joint = joint_score_fn(perturbed_batch, sigma)
-                    score_marginal = marginal_score_fn(perturbed_batch, sigma)
+                    score_joint = score_fn(perturbed_batch, sigma)
+
+                    perturbed_batch_x = perturbed_batch.clone()
+                    perturbed_batch_x[:, y_indices] = graph.dim - 1
+
+                    perturbed_batch_y = perturbed_batch.clone()
+                    perturbed_batch_y[:, x_indices] = graph.dim - 1
+
+                    score_marginal_x = score_fn(perturbed_batch_x, sigma)
+                    score_marginal_x = score_marginal_x[:, x_indices]
+
+                    score_marginal_y = score_fn(perturbed_batch_y, sigma)
+                    score_marginal_y = score_marginal_y[:, y_indices]
+
+                    score_marginal = torch.cat([score_marginal_x, score_marginal_y], dim=1)
                     
                     # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
                     divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)

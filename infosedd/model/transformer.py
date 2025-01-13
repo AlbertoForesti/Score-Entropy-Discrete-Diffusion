@@ -245,7 +245,6 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
         self.sigma_map = TimestepEmbedder(config.model.cond_dim)
         self.marginal_flag_map = TimestepEmbedder(config.model.cond_dim)
 
-        self.marginal_block = DDiTBlock(config.model.hidden_size, config.model.n_heads, config.model.cond_dim, dropout=config.model.dropout)
         # raise UserWarning(f"Config model is {config.model}")
         self.rotary_emb = rotary.Rotary(config.model.hidden_size // config.model.n_heads)
 
@@ -270,18 +269,13 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
 
         c = F.silu(self.sigma_map(sigma))
 
-        marginal_flag = torch.ones_like(sigma) if is_marginal else -torch.ones_like(sigma)
-        d = F.silu(self.marginal_flag_map(marginal_flag))
-
         # raise UserWarning(f"d datatype is {d.dtype}, c datatype is {c.dtype}")
 
         rotary_cos_sin = self.rotary_emb(x)
 
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-            x = self.marginal_block(x, rotary_cos_sin, d, seqlens=None)
             for i in range(len(self.blocks)):
                 x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
-
             x = self.output_layer(x, c)
 
         if self.scale_by_sigma:

@@ -10,5 +10,5 @@ hydra:
       ++distribution.min_val: 0.001
       ++distribution.dim_x: 2
       ++distribution.dim_y: 2
-      ++distribution.seq_length_x: 10
-      ++distribution.seq_length_y: 10
+      ++distribution.seq_length_x: 100
+      ++distribution.seq_length_y: 100
