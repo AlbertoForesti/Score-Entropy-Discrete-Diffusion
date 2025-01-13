@@ -2,7 +2,7 @@
 
 defaults:
 - _self_
-- model: nano_d2
+- model: mlp
 
 estimator:
   _target_: infosedd.infosedd.InfoSEDD
@@ -17,8 +17,8 @@ estimator:
     montecarlo: False
     dynkin: True
     use_analytic_score: False
-    debug: True
-    generate_samples: True
+    debug: False
+    generate_samples: False
     resume_training: True
     checkpoint_path: null
 
@@ -36,7 +36,7 @@ estimator:
       ema: 0.9999
       checkpoint_dir: "infosedd/checkpoints"
       accelerator: "gpu"
-      devices: 1
+      devices: [2]
       max_steps: 50001
       val_check_interval: 5000
       p_marginal: 0.5
@@ -49,7 +49,7 @@ estimator:
     noise:
       type: geometric
       sigma_min: 1e-5
-      sigma_max: 1
+      sigma_max: 20
 
     sampling:
       predictor: euler

@@ -30,7 +30,7 @@ estimator:
     inference:
       type: "c"
       mc_iter: 10
-      importance_sampling: False
+      importance_sampling: True
       sigma: 1.0
       bs: 512
       generate_samples: False
