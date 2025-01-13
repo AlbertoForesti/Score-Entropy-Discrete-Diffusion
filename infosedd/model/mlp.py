@@ -11,15 +11,14 @@ class DiffusionMLP(nn.Module):
         self.hidden_dim = config.model.hidden_size
 
         # Define the layers
-        self.fc1 = nn.Linear(self.sequence_length + 2, self.hidden_dim)  # +1 for sigma. +1 for marginal or joint
+        self.fc1 = nn.Linear(self.sequence_length + 1, self.hidden_dim)  # +1 for sigma. +1 for marginal or joint
         self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.fc3 = nn.Linear(self.hidden_dim, self.sequence_length * self.vocab_size)
 
     def forward(self, indices, sigma, is_marginal=False):
         # Concatenate x and sigma
         sigma_expanded = sigma.unsqueeze(1)
-        is_marginal_flag = -torch.ones_like(sigma_expanded) if is_marginal else torch.ones_like(sigma_expanded)
-        x = torch.cat((indices, sigma_expanded, is_marginal_flag), dim=1)
+        x = torch.cat((indices, sigma_expanded), dim=1)
 
         # Pass through the MLP
         # raise UserWarning(f"x shape is {x.shape}: {x}")

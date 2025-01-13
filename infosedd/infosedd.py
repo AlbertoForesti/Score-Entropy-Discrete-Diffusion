@@ -107,6 +107,8 @@ class InfoSEDD(pl.LightningModule):
 
     def call_mutinfo(self, x: np.ndarray, y: np.ndarray):
         self.args["seq_length"] = x.shape[1] + y.shape[1]
+        if self.args["alphabet_size"] is None:
+            self.args["alphabet_size"] = max(np.max(x), np.max(y)) + 1
         self.mutinfo_estimate = None
         self.entropy_estimate = None
 

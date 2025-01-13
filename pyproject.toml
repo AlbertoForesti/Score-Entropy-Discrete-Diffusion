@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "infosedd"
-version = "2024.12.09"
+version = "2025.01.13"
 authors = [
   { name="Alberto Foresti", email="alberto.foresti@eurecom.fr" },
 ]
@@ -33,6 +33,8 @@ dependencies = [
     "bebeziana @ git+https://github.com/VanessB/bebeziana",
     "distribution_generator @ git+https://github.com/AlbertoForesti/distribution-generator",
     "minde @ git+https://github.com/AlbertoForesti/minde",
+    "torchkld @ git+https://github.com/VanessB/pytorch-kld",
+    "bmi" @ https://github.com/cbg-ethz/bmi,
     "hydra-core",
     "diffusers"
 ]
