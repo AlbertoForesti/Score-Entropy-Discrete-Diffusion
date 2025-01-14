@@ -2,7 +2,7 @@
 
 defaults:
 - _self_
-- model: mlp
+- model: unetmlp
 
 estimator:
   _target_: infosedd.infosedd.InfoSEDD

@@ -143,7 +143,7 @@ class UnetMLP_simple(nn.Module):
         if init_dim == None:
             init_dim = (self.sequence_length + 1) * self.dim_mults[0]
 
-        dim_in = self.sequence_length + 1 # 1 for marginal flag
+        dim_in = self.sequence_length
         dims = [init_dim, *map(lambda m: init_dim * m, self.dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
 
@@ -207,10 +207,8 @@ class UnetMLP_simple(nn.Module):
     def forward(self, indices, sigma, is_marginal=False, std=None):
         sigma = sigma.reshape(sigma.size(0), 1)
 
-        is_marginal_flag = -torch.ones_like(sigma) if is_marginal else torch.ones_like(sigma)
-        x = torch.cat((indices, is_marginal_flag), dim=1)
         try:        
-            x = self.init_lin(x.float())
+            x = self.init_lin(indices.float())
         except:
             raise UserWarning(f"x shape {x.shape} x.float() shape {x.float().shape} sigma shape {sigma.shape} init_lim input dim {self.init_lin.in_features}")
 
