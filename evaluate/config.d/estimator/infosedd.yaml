@@ -2,7 +2,7 @@
 
 defaults:
 - _self_
-- model: unetmlp
+- model: pico
 
 estimator:
   _target_: infosedd.infosedd.InfoSEDD
@@ -36,8 +36,8 @@ estimator:
       ema: 0.999
       checkpoint_dir: "infosedd/checkpoints"
       accelerator: "gpu"
-      devices: [2]
-      max_steps: 50001
+      devices: [0]
+      max_steps: 10001
       val_check_interval: 5000
       p_marginal: 0.5
 

@@ -34,7 +34,7 @@ dependencies = [
     "distribution_generator @ git+https://github.com/AlbertoForesti/distribution-generator",
     "minde @ git+https://github.com/AlbertoForesti/minde",
     "torchkld @ git+https://github.com/VanessB/pytorch-kld",
-    "bmi" @ git+https://github.com/cbg-ethz/bmi,
+    "bmi @ git+https://github.com/cbg-ethz/bmi",
     "hydra-core",
     "diffusers"
 ]
