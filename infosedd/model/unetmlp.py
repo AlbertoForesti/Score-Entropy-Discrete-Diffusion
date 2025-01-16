@@ -1,6 +1,9 @@
 
 from functools import partial
+from positional_encodings.torch_encodings import PositionalEncoding1D, Summer
 import torch
+import math
+
 from torch import nn
 
 
@@ -31,6 +34,24 @@ def num_to_groups(num, divisor):
 
 
 # small helper modules
+
+import torch.nn as nn
+
+class Permute(nn.Module):
+    def __init__(self, *dims):
+        super(Permute, self).__init__()
+        self.dims = dims
+
+    def forward(self, x):
+        return x.permute(*self.dims)
+
+class Unpermute(nn.Module):
+    def __init__(self, *dims):
+        super(Unpermute, self).__init__()
+        self.dims = dims
+
+    def forward(self, x):
+        return x.permute(*self.dims)
 
 class Residual(nn.Module):
     def __init__(self, fn):
@@ -67,13 +88,18 @@ class Block(nn.Module):
         # self.proj = WeightStandardizedConv2d(dim, dim_out, 3, padding = 1)
         self.proj = nn.Linear(dim, dim_out)
         self.act = nn.SiLU()
+        self.permute = Permute(0, 2, 1)
+        self.unpermute = Unpermute(0, 2, 1)
         # self.act = nn.Relu()
         self.norm = nn.GroupNorm(groups, dim)
+        self.dim = dim
         # self.norm = nn.BatchNorm1d( dim)
         self.shift_scale = shift_scale
 
     def forward(self, x, sigma=None):
+        x = self.permute(x)
         x = self.norm(x)
+        x = self.unpermute(x)
         x = self.act(x)
         x = self.proj(x)
 
@@ -82,8 +108,11 @@ class Block(nn.Module):
                 scale, shift = sigma
                 x = x * (scale.squeeze() + 1) + shift.squeeze()
             else:
-                x = x + sigma
-
+                sigma = sigma.unsqueeze(1)
+                try:
+                    x = x + sigma
+                except:
+                    raise UserWarning(f"Incompatible shapes: x={x.shape}, sigma={sigma.shape}")
         return x
 
 
@@ -117,7 +146,22 @@ class ResnetBlock(nn.Module):
 
         h = self.block2(h)
 
-        return h + self.lin_layer(x)
+        out = h + self.lin_layer(x)
+
+        return out
+
+class EmbeddingLayer(nn.Module):
+    def __init__(self, dim, vocab_dim):
+        """
+        Mode arg: 0 -> use a learned layer, 1 -> use eigenvectors, 
+        2-> add in eigenvectors, 3 -> use pretrained embedding matrix
+        """
+        super().__init__()
+        self.embedding = nn.Parameter(torch.empty((vocab_dim, dim)))
+        torch.nn.init.kaiming_uniform_(self.embedding, a=math.sqrt(5))
+
+    def forward(self, x):
+        return self.embedding[x]
 
 
 class UnetMLP_simple(nn.Module):
@@ -143,13 +187,13 @@ class UnetMLP_simple(nn.Module):
         if init_dim == None:
             init_dim = (self.sequence_length + 1) * self.dim_mults[0]
 
-        dim_in = self.sequence_length
         dims = [init_dim, *map(lambda m: init_dim * m, self.dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
 
         block_klass = partial(ResnetBlock, groups=self.resnet_block_groups)
 
-        self.init_lin = nn.Linear(dim_in, init_dim)
+        self.embedding_layer = EmbeddingLayer(init_dim, self.vocab_size)
+        self.p_enc_1d_model_sum = Summer(PositionalEncoding1D(init_dim))
 
         self.sigma_mlp = nn.Sequential(
             nn.Linear(1, self.sigma_dim),
@@ -193,24 +237,23 @@ class UnetMLP_simple(nn.Module):
         self.final_res_block = block_klass(
             init_dim * 2, init_dim, sigma_emb_dim=self.sigma_dim)
 
-        self.proj = nn.Linear(init_dim, self.vocab_size*self.sequence_length)
+        self.proj = nn.Linear(init_dim, self.vocab_size)
 
         # self.proj.weight.data.fill_(0.0)
         # self.proj.bias.data.fill_(0.0)
 
         self.final_lin = nn.Sequential(
+            Permute(0, 2, 1),  # Change shape to (batch_size, channels, token_dim)
             nn.GroupNorm(self.resnet_block_groups, init_dim),
+            Unpermute(0, 2, 1),  # Change shape back to (batch_size, token_dim, channels)
             nn.SiLU(),
             self.proj
         )
 
     def forward(self, indices, sigma, is_marginal=False, std=None):
         sigma = sigma.reshape(sigma.size(0), 1)
-
-        try:        
-            x = self.init_lin(indices.float())
-        except:
-            raise UserWarning(f"x shape {x.shape} x.float() shape {x.float().shape} sigma shape {sigma.shape} init_lim input dim {self.init_lin.in_features}")
+        x = self.embedding_layer(indices)
+        x = self.p_enc_1d_model_sum(x)
 
         r = x.clone()
 
@@ -234,7 +277,7 @@ class UnetMLP_simple(nn.Module):
         for blocks in self.ups:
 
             block1 = blocks[0]
-            x = torch.cat((x, h.pop()), dim=1)
+            x = torch.cat((x, h.pop()), dim=-1)
             x = block1(x, sigma)
 
             # x = torch.cat((x, h.pop()), dim = 1)
@@ -242,7 +285,7 @@ class UnetMLP_simple(nn.Module):
 
            # x = upsample(x)
 
-        x = torch.cat((x, r), dim=1)
+        x = torch.cat((x, r), dim=-1)
 
         x = self.final_res_block(x, sigma)
 
@@ -251,7 +294,6 @@ class UnetMLP_simple(nn.Module):
         else:
             x = self.final_lin(x)
         
-        x = x.view(-1, self.sequence_length, self.vocab_size)
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
-
+        
         return x

@@ -20,4 +20,4 @@ hydra:
     max_batch_size: 100 # Makes startup faster, see https://github.com/facebookresearch/hydra/issues/1324.
     params:
       ++n_samples: 10000
-      ++distribution.n_minus_1: 6
+      ++distribution.n_minus_1: 10

@@ -2,7 +2,7 @@
 
 defaults:
 - _self_
-- model: pico
+- model: unetmlp
 
 estimator:
   _target_: infosedd.infosedd.InfoSEDD
@@ -33,11 +33,11 @@ estimator:
       snapshot_freq_for_preemption: 10000
       weight: standard
       snapshot_sampling: True
-      ema: 0.999
-      checkpoint_dir: "infosedd/checkpoints"
+      ema: 0.9999
+      checkpoint_dir: "infosedd/checkpoints_xor"
       accelerator: "gpu"
       devices: [0]
-      max_steps: 10001
+      max_steps: 100001
       val_check_interval: 5000
       p_marginal: 0.5
 
@@ -65,7 +65,7 @@ estimator:
     optim:
       weight_decay: 0
       optimizer: AdamW
-      lr: 5e-3
+      lr: 3e-4
       beta1: 0.9
       beta2: 0.999
       eps: 1e-8

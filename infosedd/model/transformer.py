@@ -10,7 +10,9 @@ from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
 from huggingface_hub import PyTorchModelHubMixin
 from omegaconf import OmegaConf
 
-from . import rotary
+from positional_encodings.torch_encodings import PositionalEncoding1D, Summer
+
+
 from .fused_add_dropout_scale import (
     bias_dropout_add_scale_fused_train, 
     bias_dropout_add_scale_fused_inference, 
@@ -150,7 +152,7 @@ class DDiTBlock(nn.Module):
         )
 
 
-    def forward(self, x, rotary_cos_sin, c, seqlens=None):
+    def forward(self, x, c, seqlens=None):
         batch_size, seq_len = x.shape[0], x.shape[1]
 
         bias_dropout_scale_fn = self._get_bias_dropout_scale()
@@ -164,12 +166,6 @@ class DDiTBlock(nn.Module):
 
         qkv = self.attn_qkv(x)
         qkv = rearrange(qkv, 'b s (three h d) -> b s three h d', three=3, h=self.n_heads)
-        with torch.cuda.amp.autocast(enabled=False):
-            cos, sin = rotary_cos_sin
-            # raise UserWarning(f"Shapes are {qkv.shape}, {cos.shape}, {sin.shape}")
-            qkv = rotary.apply_rotary_pos_emb(
-                qkv, cos.to(qkv.dtype), sin.to(qkv.dtype)
-            )
         qkv = rearrange(qkv, 'b s ... -> (b s) ...')
         if seqlens is None:
             cu_seqlens = torch.arange(
@@ -242,11 +238,12 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
             vocab_size = config.tokens + (1 if self.absorb else 0)
         
         self.vocab_embed = EmbeddingLayer(config.model.hidden_size, vocab_size)
+        self.p_enc_1d_model_sum = Summer(PositionalEncoding1D(config.model.hidden_size))
+
         self.sigma_map = TimestepEmbedder(config.model.cond_dim)
         self.marginal_flag_map = TimestepEmbedder(config.model.cond_dim)
 
         # raise UserWarning(f"Config model is {config.model}")
-        self.rotary_emb = rotary.Rotary(config.model.hidden_size // config.model.n_heads)
 
         self.blocks = nn.ModuleList([
             DDiTBlock(config.model.hidden_size, config.model.n_heads, config.model.cond_dim, dropout=config.model.dropout) for _ in range(config.model.n_blocks)
@@ -267,15 +264,16 @@ class SEDD(nn.Module, PyTorchModelHubMixin):
     def forward(self, indices, sigma, is_marginal=False):
         x = self.vocab_embed(indices)
 
+        x = self.p_enc_1d_model_sum(x)
+
         c = F.silu(self.sigma_map(sigma))
 
         # raise UserWarning(f"d datatype is {d.dtype}, c datatype is {c.dtype}")
 
-        rotary_cos_sin = self.rotary_emb(x)
 
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             for i in range(len(self.blocks)):
-                x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
+                x = self.blocks[i](x, c, seqlens=None)
             x = self.output_layer(x, c)
 
         if self.scale_by_sigma:

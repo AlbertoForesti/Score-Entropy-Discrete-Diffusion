@@ -6,4 +6,4 @@ alphabet_size: 2
 distribution:
   _target_: infosedd.custom_rvs.XORRandomVariable
   p: 0.5
-  n_minus_1: 1
+  n_minus_1: 2
