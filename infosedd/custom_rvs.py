@@ -27,8 +27,16 @@ class XORRandomVariable(multi_rv_frozen):
 class IsingLoaderRandomVariable:
 
     def __init__(self, path):
-        self.values = np.load(path)
+        if path.endswith(".npz"):
+            self.values = np.load(path)["arr_0"]
+        else:
+            self.values = np.load(path)
         self.values[self.values == -1] = 0
     
     def rvs(self, size=None, random_state=None):
+        if len(self.values) < size:
+            raise ValueError(f"Number of samples requested is greater than the number of samples in the dataset ({len(self.values)}).")
+        else:
+            self.values = self.values[:size]
+        raise UserWarning(f"Shape of the dataset is {self.values.shape}.")
         return self.values[:size]

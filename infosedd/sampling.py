@@ -339,6 +339,7 @@ def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
 def get_entropy_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
     
     def estimate_entropy_fn(model, data_loader):
+        indeces_to_keep = None
         if p is None:
             score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
         else:
