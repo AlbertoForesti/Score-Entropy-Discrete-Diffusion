@@ -9,7 +9,7 @@ estimator:
       arch: "mlp" # "conv"
       use_ema: True
       preprocessing: "rescale"
-      hidden_dim: 32
+      hidden_dim: 256
     training:
       lr: 1e-2
       bs: 1024

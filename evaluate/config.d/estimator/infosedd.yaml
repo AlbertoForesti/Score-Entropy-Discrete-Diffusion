@@ -9,10 +9,10 @@ estimator:
   args:
     model: ${model}
     ngpus: 1
-    mc_estimates: 100
+    mc_estimates: 10
     estimate_entropy: False
     estimate_mutinfo: True
-    mc_times: 100
+    mc_times: 10
     sampling_eps: 1e-2
     montecarlo: False
     dynkin: True
@@ -28,7 +28,7 @@ estimator:
       batch_size: 1024
       accum: 1
       snapshot_freq: 5000
-      log_freq: 50
+      log_freq: 1
       eval_freq: 5000
       snapshot_freq_for_preemption: 10000
       weight: standard
