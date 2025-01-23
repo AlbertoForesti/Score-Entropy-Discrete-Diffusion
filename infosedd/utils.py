@@ -9,9 +9,11 @@ from torch.utils.data import Dataset
 
 class SynthetitcDataset(Dataset):
 
-    def __init__(self, data, device=None):
+    def __init__(self, data, device=None, return_separated_variables=False, var_indices=None):
         self.data = data
         self.device = device
+        self.return_separated_variables = return_separated_variables
+        self.var_indices = var_indices
     
     def set_device(self, device):
         self.device = device
@@ -21,7 +23,13 @@ class SynthetitcDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return self.data[idx]
+        if not self.return_separated_variables:
+            return self.data[idx]
+        else:
+            try:
+                return tuple([self.data[idx, i] for i in self.var_indices])
+            except:
+                raise UserWarning(f"Data shape: {self.data.shape}, idx: {idx}, var_indices: {self.var_indices}")
 
 def _array_to_tensor(x, dtype=torch.int64):
     x = np.array(x)
@@ -29,19 +37,16 @@ def _array_to_tensor(x, dtype=torch.int64):
         raise TypeError("Input must be a numpy array or convertible to one.")
     return torch.tensor(x, dtype=dtype)
 
-def array_to_dataset(*args, device=None):
-    """x = _array_to_tensor(x)
-    y = _array_to_tensor(y)
-    data = torch.cat((x, y), dim=1)
-    if device is not None:
-        data = data.to(device)
-    if data.shape[-1] == 1:
-        data = data.squeeze(-1)"""
+def array_to_dataset(*args, device=None, return_separated_variables=False, dtype=torch.int64):
     variables = []
+    var_indices = []
+    start_index = 0
     for variable in args:
+        var_indices.append(range(start_index, start_index + variable.shape[-1]))
+        start_index += variable.shape[-1]
         variable = _array_to_tensor(variable)
         variables.append(variable)
-    data = torch.cat(tuple(variables), dim=1)
+    data = torch.cat(tuple(variables), dim=1).to(dtype)
     if device is not None:
         data = data.to(device)
     if data.shape[-1] == 1:
@@ -49,7 +54,7 @@ def array_to_dataset(*args, device=None):
     if len(data.shape) > 2:
         data = data.reshape(data.shape[0], -1)
     # raise UserWarning(f"Data shape: {data.shape}")
-    dataset = SynthetitcDataset(data)
+    dataset = SynthetitcDataset(data, device=device, return_separated_variables=return_separated_variables, var_indices=var_indices)
     return dataset
 
 def statistics_batch(x):

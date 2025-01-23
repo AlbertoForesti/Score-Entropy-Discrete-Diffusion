@@ -38,5 +38,4 @@ class IsingLoaderRandomVariable:
             raise ValueError(f"Number of samples requested is greater than the number of samples in the dataset ({len(self.values)}).")
         else:
             self.values = self.values[:size]
-        raise UserWarning(f"Shape of the dataset is {self.values.shape}.")
         return self.values[:size]

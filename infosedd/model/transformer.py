@@ -5,8 +5,11 @@ import numpy as np
 import math
 
 from einops import rearrange
-from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
-# from flash_attn.ops.fused_dense import FusedMLP, FusedDense
+try:
+    from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+    # from flash_attn.ops.fused_dense import FusedMLP, FusedDense
+except:
+    print("Flash attention not installed.")
 from huggingface_hub import PyTorchModelHubMixin
 from omegaconf import OmegaConf
 

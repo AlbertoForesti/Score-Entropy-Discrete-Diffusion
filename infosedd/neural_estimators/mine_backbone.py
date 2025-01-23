@@ -1,5 +1,9 @@
 import torch
+
+from mutinfo.estimators import neural
+
 from mutinfo.estimators.neural.mine import _MINE_backbone
+
 
 def get_backbone_factory(hidden_size, n_layers, activation, print_num_params=True):
 
