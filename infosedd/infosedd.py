@@ -73,7 +73,7 @@ class InfoSEDD(pl.LightningModule):
         warmup_steps = self.args.optim.warmup
         
         # Create the learning rate scheduler
-        scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps, num_cycles=10)
+        scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
         
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step'}]
     
@@ -244,6 +244,7 @@ class InfoSEDD(pl.LightningModule):
         self.mutinfo_estimate = None
         self.score_model.to(self.device)
         self.noise.to(self.device)
+        self.logger.experiment.add_text("args", str(self.args), self.global_step)
     
     def training_step(self, batch, batch_idx):
         self.train()

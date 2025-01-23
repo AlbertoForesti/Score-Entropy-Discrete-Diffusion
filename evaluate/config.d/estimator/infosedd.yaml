@@ -33,7 +33,7 @@ estimator:
       snapshot_freq_for_preemption: 10000
       weight: standard
       snapshot_sampling: True
-      ema: 0.9999
+      ema: 0.999
       checkpoint_dir: "infosedd/checkpoints_xor"
       accelerator: "gpu"
       devices: [0]
