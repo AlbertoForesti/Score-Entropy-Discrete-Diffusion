@@ -37,7 +37,7 @@ estimator:
       checkpoint_dir: "infosedd/checkpoints_xor"
       accelerator: "gpu"
       devices: [0]
-      max_steps: 100001
+      max_steps: 1000001
       val_check_interval: 5000
       p_marginal: 0.5
 
@@ -47,7 +47,7 @@ estimator:
       report_all: False
 
     noise:
-      type: geometric
+      type: loglinear
       sigma_min: 1e-5
       sigma_max: 20
 
@@ -65,7 +65,7 @@ estimator:
     optim:
       weight_decay: 0
       optimizer: AdamW
-      lr: 3e-4
+      lr: 5e-3
       beta1: 0.9
       beta2: 0.999
       eps: 1e-8
