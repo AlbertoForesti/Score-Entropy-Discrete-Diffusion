@@ -61,7 +61,8 @@ class InfoSEDD(pl.LightningModule):
                          max_epochs=None,
                          check_val_every_n_epoch=None,
                          val_check_interval=self.args.training.val_check_interval,
-                         gradient_clip_val=self.args.optim.gradient_clip_val,)  
+                         gradient_clip_val=self.args.optim.gradient_clip_val,
+                         accumulate_grad_batches=self.args.training.accum,)  
     
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.score_model.parameters(), lr=self.args.optim.lr, betas=(self.args.optim.beta1, self.args.optim.beta2), eps=self.args.optim.eps,

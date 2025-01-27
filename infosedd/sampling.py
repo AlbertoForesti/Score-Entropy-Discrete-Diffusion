@@ -373,7 +373,7 @@ def get_entropy_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device
                         perturbed_batch = perturbed_batch[:, indeces_to_keep]
                     
                     # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
-                    divergence_estimate = graph.score_logprobability(score, dsigma, perturbed_batch)
+                    divergence_estimate = graph.score_logprobability(score, dsigma, perturbed_batch, sigma)
                     estimates.append(divergence_estimate.mean().item())
                     step += 1
             progress_bar.close()

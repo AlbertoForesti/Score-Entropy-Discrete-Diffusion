@@ -211,9 +211,6 @@ def get_distribution(data_config):
 
 def get_bernoulli_dataset(data_config):
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
     # random_variable = UniformlyQuantized(mutual_information, norm(loc=0.0, scale=1.0))
     # random_variable = UniformlyQuantized(mutual_information, bernoulli(0.5))
     # random_variable = UniformlyQuantized(mutual_information, poisson(4.0))
@@ -239,9 +236,6 @@ def get_bernoulli_dataset(data_config):
     return dataset
 
 def get_categorical_dataset(data_config):
-
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
     rv = get_rv(data_config.mut_info, data_config.alphabet_size, data_config.alphabet_size, data_config.seq_length_x, data_config.seq_length_y, min_val=data_config.min_val)
     print("Joint distribution ", rv.joint_dist)

@@ -278,32 +278,6 @@ class Graph(abc.ABC):
         ret = ret.sum(dim=-1)
 
         return ret
-    
-    def score_logprobability(self, score_p, dsigma, x):
-
-        x = x.unsqueeze(-1)
-
-        log_score_p = torch.scatter(score_p.log(), -1, x, torch.zeros_like(score_p))
-        score_p = torch.scatter(score_p, -1, x, torch.zeros_like(score_p))
-
-        # constant factor
-        const = score_p * (log_score_p - 1) + 1
-
-        unscaled_ret_value = const
-
-        x = x.squeeze(-1)
-
-        transp_rate = self.transp_rate(x)
-        try:
-            scale_factor = torch.scatter(transp_rate, -1, x[...,None], torch.zeros_like(transp_rate))
-        except:
-            raise ValueError(f"Could not scatter {transp_rate.shape} with {x.shape}")
-        scale_factor = scale_factor * dsigma[..., None]
-
-        ret = scale_factor * unscaled_ret_value
-        ret = ret.reshape(ret.shape[0], -1).sum(dim=-1)
-
-        return ret
 
 
 class Uniform(Graph):
@@ -429,6 +403,32 @@ class Uniform(Graph):
         pos_term = 1
         # print(f"pos_term shape: {pos_term.shape}")
         return pos_term - neg_term
+    
+    def score_logprobability(self, score_p, dsigma, x, sigma=None):
+
+        x = x.unsqueeze(-1)
+
+        log_score_p = torch.scatter(score_p.log(), -1, x, torch.zeros_like(score_p))
+        score_p = torch.scatter(score_p, -1, x, torch.zeros_like(score_p))
+
+        # constant factor
+        const = score_p * (log_score_p - 1) + 1
+
+        unscaled_ret_value = const
+
+        x = x.squeeze(-1)
+
+        transp_rate = self.transp_rate(x)
+        try:
+            scale_factor = torch.scatter(transp_rate, -1, x[...,None], torch.zeros_like(transp_rate))
+        except:
+            raise ValueError(f"Could not scatter {transp_rate.shape} with {x.shape}")
+        scale_factor = scale_factor * dsigma[..., None]
+
+        ret = scale_factor * unscaled_ret_value
+        ret = ret.reshape(ret.shape[0], -1).sum(dim=-1)
+
+        return ret
 
 
 class Absorbing(Graph):
@@ -510,3 +510,61 @@ class Absorbing(Graph):
         entropy[rel_ind] += pos_term - neg_term + const
         return entropy
     
+    def score_logprobability(self, score_p, dsigma, x, sigma=None):
+
+        assert sigma is not None, "sigma must be provided for absorbing graph"
+
+        rel_ind = x == self.dim - 1
+        esigm1 = torch.where(
+            sigma < 0.5,
+            torch.expm1(sigma),
+            torch.exp(sigma) - 1
+        )
+
+        x = x.unsqueeze(-1)
+        
+        log_score_p = torch.scatter(score_p.log(), -1, x, torch.zeros_like(score_p))
+        score_p = torch.scatter(score_p, -1, x, torch.zeros_like(score_p))
+
+        # raise UserWarning(f"Devices: {esigm1.device}, {x.device}, {x0.device}, {rel_ind.device}, {score.device}")
+        # raise UserWarning(f"Dimensions: {score.shape}, {esigm1.shape}, {rel_ind.shape}, {x0.shape}, {x.shape}, rel_ind={rel_ind}")
+        esigm1 = esigm1.unsqueeze(-1)
+        ratio = 1 / esigm1.expand_as(score_p)
+        ratio = ratio/(self.dim-1)
+
+        rel_ind = rel_ind.unsqueeze(-1).expand_as(score_p)
+
+        # constant term
+        const = score_p * (log_score_p - 1)
+        
+        pos_term = ratio
+        neg_term = score_p * ratio.log()
+
+        # unscaled_ret_value = pos_term - neg_term + const
+        unscaled_ret_value = pos_term - neg_term + const
+
+        x = x.squeeze(-1)
+
+        transp_rate = self.transp_rate(x)
+        try:
+            scale_factor = torch.scatter(transp_rate, -1, x[...,None], torch.zeros_like(transp_rate))
+        except:
+            raise ValueError(f"Could not scatter {transp_rate.shape} with {x.shape}")
+        scale_factor = scale_factor * dsigma[..., None]
+        # scale_factor = dsigma[..., None]
+
+        # raise UserWarning(f"Shapes: {unscaled_ret_value.shape}, {scale_factor.shape}")
+
+        ret = scale_factor * unscaled_ret_value
+        ret = torch.where(rel_ind, ret, torch.zeros_like(ret))
+        try:
+            ret = ret[:,:,:-1]
+        except:
+            raise UserWarning(f"Could not slice {ret.shape}")
+
+        # raise UserWarning(f"Shape is {ret.shape}, example: {ret[:5]}, x: {x[:5]}") # 256,9,2
+        ret = ret.reshape(ret.shape[0], -1)
+        ret = ret.sum(dim=-1)
+        # raise UserWarning(f"Shape is {ret.shape}") # 256,9
+
+        return ret

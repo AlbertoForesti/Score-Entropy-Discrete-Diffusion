@@ -10,8 +10,6 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.types import RunMode
 from omegaconf import OmegaConf, open_dict
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-
 @hydra.main(version_base=None, config_path="configs", config_name="config_entropy")
 def main(cfg):
     ngpus = cfg.ngpus
