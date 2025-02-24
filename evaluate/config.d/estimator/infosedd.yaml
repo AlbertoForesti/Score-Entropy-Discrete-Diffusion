@@ -9,10 +9,11 @@ estimator:
   args:
     model: ${model}
     ngpus: 1
-    mc_estimates: 10
+    mc_estimates: 100
     estimate_entropy: False
     estimate_mutinfo: True
-    mc_times: 10
+    estimate_oinfo: False
+    mc_times: 100
     sampling_eps: 1e-2
     montecarlo: False
     dynkin: True
@@ -21,6 +22,8 @@ estimator:
     generate_samples: False
     resume_training: True
     checkpoint_path: null
+    is_parametric_marginal: True
+    use_marginal_flag: True
 
     cond: null
 
@@ -34,9 +37,9 @@ estimator:
       weight: standard
       snapshot_sampling: True
       ema: 0.999
-      checkpoint_dir: "infosedd/checkpoints_xor"
+      checkpoint_dir: "infosedd/checkpoints_ema_mutinfo"
       accelerator: "gpu"
-      devices: [0]
+      devices: [3]
       max_steps: 100001
       val_check_interval: 5000
       p_marginal: 0.5
@@ -49,7 +52,7 @@ estimator:
     noise:
       type: geometric
       sigma_min: 1e-5
-      sigma_max: 20
+      sigma_max: 10
 
     sampling:
       predictor: euler

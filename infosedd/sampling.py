@@ -269,118 +269,119 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device, p=None):
     
     return sampling_fn
 
-def get_mutinfo_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device, x_indices, y_indices, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
-    
-    def estimate_mutinfo_fn(model, data_loader):
-        if p is None:
-            score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
+def get_mutinfo_step_fn(config, graph, noise, proj_fn = lambda x: x):
+
+    def mutinfo_step_fn(model, batch):
+        if config.is_parametric_marginal:
+            score_fn_x = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=0)
+            score_fn_y = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=1)
+            score_fn_joint = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=2)
         else:
-            joint_score_fn = lambda x, s: graph.get_analytic_score(x, p, s)
-            px = torch.sum(p, axis=1)
-            py = torch.sum(p, axis=0)
-            print("PX: ", px, " with shape ", px.shape)
-            print("PY: ", py, " with shape ", py.shape)
-            print("PXY: ", p, " with shape ", p.shape)
-            pxy_margin = px * py.T
-            pxy_margin = pxy_margin.unsqueeze(-1)
-            print("PXY is_marginal: ", pxy_margin, " with shape ", pxy_margin.shape)
-            marginal_score_fn = lambda x, s: graph.get_analytic_score(x, pxy_margin, s)
-        estimates = []
+            score_fn = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=None)
         with torch.no_grad():
-            step = 0
-            stop = False
-            progress_bar = tqdm(total=config.mc_estimates, desc="Estimating Mutual Information")
-            while not stop:
-                for batch in data_loader:
-                    progress_bar.update(1)
-                    batch = batch.to(device)
-                    if step==config.mc_estimates:
-                        stop = True
-                        break
-                    t = torch.rand(batch.shape[0], 1, device=device)
-                    sigma, dsigma = noise(t)
-                    # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
-                    perturbed_batch = graph.sample_transition(batch, sigma)
-                    
-                    score_joint = score_fn(perturbed_batch, sigma)
+            t = torch.rand(batch.shape[0], 1).to(batch.device)
+            sigma, dsigma = noise(t)
+            
+            # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
+            perturbed_batch = graph.sample_transition(batch, sigma)
+            perturbed_batch = proj_fn(perturbed_batch)
 
-                    perturbed_batch_x = perturbed_batch.clone()
-                    perturbed_batch_x[:, y_indices] = graph.dim - 1
+            perturbed_batch_x = perturbed_batch.clone()
+            perturbed_batch_x[:, config.y_indices] = graph.dim - 1
 
-                    perturbed_batch_y = perturbed_batch.clone()
-                    perturbed_batch_y[:, x_indices] = graph.dim - 1
+            perturbed_batch_y = perturbed_batch.clone()
+            perturbed_batch_y[:, config.x_indices] = graph.dim - 1
 
-                    score_marginal_x = score_fn(perturbed_batch_x, sigma)
-                    score_marginal_x = score_marginal_x[:, x_indices]
+            if config.is_parametric_marginal:
+                try:
+                    score_joint = score_fn_joint(perturbed_batch, sigma)
+                except:
+                    raise UserWarning(f"Device is {sigma.device}, perturbed batch is {perturbed_batch.device}")
+                score_marginal_x = score_fn_x(perturbed_batch_x, sigma)
+                score_marginal_y = score_fn_y(perturbed_batch_y, sigma)
+            else:
+                score_joint = score_fn(perturbed_batch, sigma)
+                score_marginal_x = score_fn(perturbed_batch_x, sigma)
+                score_marginal_y = score_fn(perturbed_batch_y, sigma)
 
-                    score_marginal_y = score_fn(perturbed_batch_y, sigma)
-                    score_marginal_y = score_marginal_y[:, y_indices]
+            score_marginal_x = score_marginal_x[:, config.x_indices]
 
-                    score_marginal = torch.cat([score_marginal_x, score_marginal_y], dim=1)
+            score_marginal_y = score_marginal_y[:, config.y_indices]
 
-                    score_marginal = torch.where(torch.isnan(score_marginal), torch.ones_like(score_marginal), score_marginal)
-                    score_joint = torch.where(torch.isnan(score_joint), torch.ones_like(score_joint), score_joint)
+            score_marginal = torch.cat([score_marginal_x, score_marginal_y], dim=1)
 
-                    score_marginal = torch.where(torch.isinf(score_marginal), torch.ones_like(score_marginal), score_marginal)
-                    score_joint = torch.where(torch.isinf(score_joint), torch.ones_like(score_joint), score_joint)
+            score_marginal = torch.where(torch.isnan(score_marginal), torch.ones_like(score_marginal), score_marginal)
+            score_joint = torch.where(torch.isnan(score_joint), torch.ones_like(score_joint), score_joint)
 
-                    score_marginal = torch.where(score_marginal<1e-5, 1e-5*torch.ones_like(score_marginal), score_marginal)
-                    score_joint = torch.where(score_joint<1e-5, 1e-5*torch.ones_like(score_joint), score_joint)
-                    
-                    # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
-                    divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
-                    estimates.append(divergence_estimate.mean().item())
-                    step += 1
-            progress_bar.close()
-        print("Mean estimate: ", np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5], "N estimates: ", len(estimates))
-        return np.mean(estimates)
-    return estimate_mutinfo_fn
+            score_marginal = torch.where(torch.isinf(score_marginal), torch.ones_like(score_marginal), score_marginal)
+            score_joint = torch.where(torch.isinf(score_joint), torch.ones_like(score_joint), score_joint)
 
-def get_entropy_dynkin_estimate_fn(config, graph, noise, batch_dims, eps, device, p=None, proj_fun = lambda x: x, indeces_to_keep=None):
+            score_marginal = torch.where(score_marginal<1e-5, 1e-5*torch.ones_like(score_marginal), score_marginal)
+            score_joint = torch.where(score_joint<1e-5, 1e-5*torch.ones_like(score_joint), score_joint)
+            
+            # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
+            divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
+            return divergence_estimate.mean().item()
     
-    def estimate_entropy_fn(model, data_loader):
-        indeces_to_keep = None
-        if p is None:
-            score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
-        else:
-            score_fn = lambda x, s: graph.get_analytic_score(x, p, s)
-        estimates = []
+    return mutinfo_step_fn
+
+def get_entropy_step_fn(config, graph, noise):
+    def entropy_step_fn(model, batch):
+        score_fn = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=None)
         with torch.no_grad():
-            step = 0
-            stop = False
-            progress_bar = tqdm(total=config.mc_estimates, desc="Estimating Entropy")
-            while not stop:
-                for batch in data_loader:
-                    progress_bar.update(1)
-                    batch = batch.to(device)
-                    if step==config.mc_estimates:
-                        stop = True
-                        break
-                    t = torch.rand(batch.shape[0], 1, device=device)
-                    sigma, dsigma = noise(t)
-                    # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
-                    perturbed_batch = graph.sample_transition(batch, sigma)
+            perturbed_batch = graph.sample_transition(batch, noise)
+            t = torch.rand(batch.shape[0], 1).to(batch.device)
+            sigma, dsigma = noise(t)
+            score = score_fn(perturbed_batch, sigma)
+            divergence_estimate = graph.score_logprobability(score, dsigma, perturbed_batch, sigma).mean().item()
+            return batch.shape[1]*np.log(config.alphabet_size) - divergence_estimate
+    return entropy_step_fn
 
-                    if hasattr(config, 'conditioning_indices') and config.conditioning_indices is not None:
-                        indeces_to_keep = config.conditioning_indices
-                        perturbed_batch[:, indeces_to_keep] = batch[:, indeces_to_keep]
-                    
-                    score = score_fn(perturbed_batch, sigma)
+def get_oinfo_step_fn(config, graph, noise):
+    def oinfo_step_fn(model,batch):
+        score_fn = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=None)
+        with torch.no_grad():
+            perturbed_batch = graph.sample_transition(batch, noise)
+            t = torch.rand(batch.shape[0], 1).to(batch.device)
+            sigma, dsigma = noise(t)
+            score_joint = score_fn(perturbed_batch, sigma)
+            all_indices = list(range(batch.shape[1]))
+            marginal_scores = []
+            s_infos = []
 
-                    if hasattr(config, 'conditioning_indices') and config.conditioning_indices is not None:
-                        indeces_to_keep = config.conditioning_indices
-                        score = score[:, indeces_to_keep]
-                        perturbed_batch = perturbed_batch[:, indeces_to_keep]
-                    
-                    # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
-                    divergence_estimate = graph.score_logprobability(score, dsigma, perturbed_batch, sigma)
-                    estimates.append(divergence_estimate.mean().item())
-                    step += 1
-            progress_bar.close()
-        factor = config.seq_length if indeces_to_keep is None else len(indeces_to_keep)
-        print("Mean estimate: ", factor*np.log(config.alphabet_size) - np.mean(estimates), "Mean kl: ",np.mean(estimates),"Std estimate: ", np.std(estimates), "Some stimates: ", estimates[:5])
-        return factor*np.log(config.alphabet_size) - np.mean(estimates)
-    return estimate_entropy_fn
+            for i in all_indices:
+                all_indices_minus_i = all_indices.copy()
+                all_indices_minus_i.remove(i)
+
+                perturbed_batch_single = perturbed_batch.clone()
+                perturbed_batch_single[:, all_indices_minus_i] = graph.dim - 1
+                score_single = score_fn(perturbed_batch_single, sigma)
+                score_single = score_single[:, [i]]
+
+                marginal_scores.append(score_single)
+                
+                perturbed_batch_all_minus_i = perturbed_batch.clone()
+                perturbed_batch_all_minus_i[:, i] = graph.dim - 1
+                score_all_minus_i = score_fn(perturbed_batch_all_minus_i, sigma)
+                # discard the i-th score
+                score_all_minus_i = score_all_minus_i[:, all_indices_minus_i]
+
+                # score_marginal_all_minus_i_and_i = torch.cat([score_single, score_all_minus_i], dim=1) # I think this is wrong, the single should be replaced at its right position
+                score_marginal_all_minus_i_and_i = torch.empty_like(score_joint)
+                try:
+                    score_marginal_all_minus_i_and_i[:, all_indices_minus_i] = score_all_minus_i
+                except:
+                    raise UserWarning(f"Score all minus i shape {score_all_minus_i.shape}, score marginal all minus i and i shape {score_marginal_all_minus_i_and_i.shape}, all indices minus i {all_indices_minus_i}, all indices {all_indices}")
+                score_marginal_all_minus_i_and_i[:, i] = score_single.squeeze()
+                
+                s_infos.append(graph.score_divergence(score_joint, score_marginal_all_minus_i_and_i, dsigma, perturbed_batch).mean().item())
+            
+            score_marginal = torch.cat(marginal_scores, dim=1)
+            total_correlation = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch).mean().item()
+            s_info = np.sum(s_infos)
+            o_info = 2*total_correlation - s_info
+            return o_info
+    return oinfo_step_fn
 
 def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, p=None):
     predictor = get_predictor(predictor)(graph, noise)
@@ -393,7 +394,7 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
             sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
         else:
             sampling_score_fn = lambda x, s: graph.get_analytic_score(x, p, s)
-        x = graph.sample_limit(*batch_dims).to(device)
+        x = graph.sample_limit(*batch_dims)
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
 

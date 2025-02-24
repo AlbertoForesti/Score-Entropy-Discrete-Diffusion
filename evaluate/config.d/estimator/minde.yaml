@@ -9,7 +9,7 @@ estimator:
       arch: "mlp" # "conv"
       use_ema: True
       preprocessing: "rescale"
-      hidden_dim: 256
+      hidden_dim: 64
     training:
       lr: 1e-2
       bs: 1024
@@ -23,8 +23,8 @@ estimator:
       ema: 0.999
       checkpoint_dir: "minde_mlp/checkpoints"
       accelerator: "gpu"
-      devices: 1
-      max_steps: 50001
+      devices: [3]
+      max_steps: 250001
       val_check_interval: 5000
       p_marginal: 0.5
     inference:

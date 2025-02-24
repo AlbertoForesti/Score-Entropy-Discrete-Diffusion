@@ -1,4 +1,6 @@
 import numpy as np
+import gzip
+import os
 from scipy.stats import bernoulli
 from scipy.stats._multivariate import multi_rv_frozen
 
@@ -39,3 +41,25 @@ class IsingLoaderRandomVariable:
         else:
             self.values = self.values[:size]
         return self.values[:size]
+
+class NumpyLoaderRandomVariable:
+
+    def __init__(self, path):
+        if path.endswith(".npz"):
+            self.values = np.load(path)["arr_0"]
+        elif path.endswith(".gz"):
+            with gzip.open(path, 'rb') as f:
+                self.values = np.load(f)
+        else:
+            self.values = np.load(path)
+    
+    def rvs(self, size=None, random_state=None):
+        if len(self.values) < size:
+            raise ValueError(f"Number of samples requested is greater than the number of samples in the dataset ({len(self.values)}).")
+        else:
+            self.values = self.values[:size]
+        data = self.values[:size]
+        X = data[:,:-1]
+        Y = data[:,-1]
+        Y = Y.reshape(-1,1)
+        return X, Y

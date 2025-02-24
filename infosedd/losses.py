@@ -36,51 +36,39 @@ def compute_density_for_timestep_sampling(
     return u
 
 
-def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, mutinfo_config=None, marginal_score_fn = None, joint_score_fn = None, p_marginal=0.5):
+def get_loss_fn(configs, noise, graph, train, sampling_eps=1e-3):
 
-    def loss_fn(model, batch, cond=None, t=None, perturbed_batch=None):
+    def loss_fn(model, batch):
         """
         Batch shape: [B, L] int. D given from graph
         """
 
-        if t is None:
-            if lv:
-                raise NotImplementedError("Yeah I gotta do this later")
-            else:
-                t = (1 - sampling_eps) * torch.rand(batch.shape[0], device=batch.device) + sampling_eps
+        t = (1 - sampling_eps) * torch.rand(batch.shape[0], device=batch.device) + sampling_eps
         
-        # t = compute_density_for_timestep_sampling("logit_normal", batch.shape[0], logit_mean=0.5, logit_std=0.1, mode_scale=0.0).to(batch.device)
-        # print("1 - Batch example: ", batch[0])
-        # t = 1e-3*torch.ones_like(t)
         sigma, dsigma = noise(t)
-        # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
-        
-        marginal_step = False
-        
-        if perturbed_batch is None:
-            perturbed_batch = graph.sample_transition(batch, sigma[:, None])
-            if np.random.rand() < 1e-3:
-                did_not_change = perturbed_batch == batch
-                did_not_change = did_not_change.cpu().numpy()
-                did_not_change = np.bitwise_and.reduce(did_not_change, axis=-1)
-                print(f"Did not change: {did_not_change.sum() / did_not_change.shape[0]}")
-        
-        # print("2 - Batch example: ", batch[0])
 
-        log_score_fn = mutils.get_score_fn(model, train=train, sampling=False, is_marginal=marginal_step)
+        if configs.is_parametric_marginal:
+            marginal_flag = np.random.randint(0, 3)
+            if marginal_flag == 0:
+                absorb_indices = configs.x_indices
+            elif marginal_flag == 1:
+                absorb_indices = configs.y_indices
+            else:
+                absorb_indices = None
+        else:
+            absorb_indices = None
+            marginal_flag = None
+        
+        perturbed_batch = graph.sample_transition(batch, sigma[:, None])
+        if absorb_indices is not None:
+            perturbed_batch[:, absorb_indices] = graph.dim - 1
+
+        log_score_fn = mutils.get_score_fn(model, train=train, sampling=False, marginal_flag=marginal_flag)
         log_score = log_score_fn(perturbed_batch, sigma)
         
         loss = graph.score_entropy(log_score, sigma[:, None], perturbed_batch, batch)
 
-        # print("3 - Batch example: ", batch[0])
-
-        # print(f"Loss shape before dsigma stuff {loss.shape}")
-
         loss = (dsigma[:, None] * loss).sum(dim=-1)
-
-        # print(f"Loss shape after dsigma stuff {loss.shape}")
-
-        # print("*****************************")
 
         return loss
 

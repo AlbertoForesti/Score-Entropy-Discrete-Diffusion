@@ -4,6 +4,7 @@ dropout: 0     # Keeping dropout the same
 resnet_block_groups: 8
 sigma_dim: 16
 init_dim: 64
+scaling_factor: null
 dim_mults:
   - 1
   - 1

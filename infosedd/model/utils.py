@@ -2,7 +2,9 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-def get_model_fn(model, train=False, is_marginal=False):
+from itertools import cycle
+
+def get_model_fn(model, train=False, marginal_flag=None):
     """Create a function to give the output of the score-based model.
 
     Args:
@@ -34,24 +36,30 @@ def get_model_fn(model, train=False, is_marginal=False):
                 model.eval()
             
                 # otherwise output the raw values (we handle mlm training in losses.py)
-            return model(x, sigma, is_marginal=is_marginal)
+            try:
+                return model(x, sigma, marginal_flag=marginal_flag)
+            except:
+                raise UserWarning(f"Devices model_fn: x={x.device}, sigma={sigma.device}")
         
         else:
             return model(x, sigma)
 
     return model_fn
 
-def get_score_fn(model, train=False, sampling=False, is_marginal=False):
+def get_score_fn(model, train=False, sampling=False, marginal_flag=None):
     if sampling:
         assert not train, "Must sample in eval mode"
-    model_fn = get_model_fn(model, train=train, is_marginal=is_marginal)
+    model_fn = get_model_fn(model, train=train, marginal_flag=marginal_flag)
 
     with torch.cuda.amp.autocast(dtype=torch.float16):
         def score_fn(x, sigma):
             
             sigma = sigma.reshape(-1)
 
-            score = model_fn(x, sigma)
+            try:
+                score = model_fn(x, sigma)
+            except:
+                raise UserWarning(f"Devices: {x.device}, {sigma.device}")
             
             if sampling:
                 # when sampling return true score (not log used for training)
@@ -60,3 +68,4 @@ def get_score_fn(model, train=False, sampling=False, is_marginal=False):
             return score
 
     return score_fn
+

@@ -3,6 +3,7 @@ import torch
 import os
 import logging
 from omegaconf import OmegaConf, open_dict
+from itertools import cycle
 import numpy as np
 
 from torch.utils.data import Dataset
@@ -143,3 +144,28 @@ def save_checkpoint(ckpt_dir, state):
         'step': state['step']
     }
     torch.save(saved_state, ckpt_dir)
+
+def get_infinite_loader(loader):
+    class InfiniteDataLoader:
+        def __init__(self, dataloader):
+            self.dataloader = dataloader
+            self.iterator = cycle(dataloader)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.iterator)
+        
+        def __len__(self):
+            return np.inf
+    
+    return InfiniteDataLoader(loader)
+
+def get_proj_fn(input_ids, input_locs):
+
+    def proj_fn(x):
+        x[:, input_ids] = input_locs
+        return x
+
+    return proj_fn

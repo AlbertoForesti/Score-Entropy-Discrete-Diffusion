@@ -1,6 +1,7 @@
 
 from functools import partial
 from positional_encodings.torch_encodings import PositionalEncoding1D, Summer
+from pytorch_lightning import LightningModule
 import torch
 import math
 
@@ -37,7 +38,7 @@ def num_to_groups(num, divisor):
 
 import torch.nn as nn
 
-class Permute(nn.Module):
+class Permute(LightningModule):
     def __init__(self, *dims):
         super(Permute, self).__init__()
         self.dims = dims
@@ -45,7 +46,7 @@ class Permute(nn.Module):
     def forward(self, x):
         return x.permute(*self.dims)
 
-class Unpermute(nn.Module):
+class Unpermute(LightningModule):
     def __init__(self, *dims):
         super(Unpermute, self).__init__()
         self.dims = dims
@@ -53,7 +54,7 @@ class Unpermute(nn.Module):
     def forward(self, x):
         return x.permute(*self.dims)
 
-class Residual(nn.Module):
+class Residual(LightningModule):
     def __init__(self, fn):
         super().__init__()
         self.fn = fn
@@ -73,7 +74,7 @@ def Downsample(dim, dim_out=None):
     return nn.Linear(dim, default(dim_out, dim))
 
 
-class Residual(nn.Module):
+class Residual(LightningModule):
     def __init__(self, fn):
         super().__init__()
         self.fn = fn
@@ -82,7 +83,7 @@ class Residual(nn.Module):
         return self.fn(x, *args, **kwargs) + x
 
 
-class Block(nn.Module):
+class Block(LightningModule):
     def __init__(self, dim, dim_out, groups=8, shift_scale=True):
         super().__init__()
         # self.proj = WeightStandardizedConv2d(dim, dim_out, 3, padding = 1)
@@ -116,8 +117,8 @@ class Block(nn.Module):
         return x
 
 
-class ResnetBlock(nn.Module):
-    def __init__(self, dim, dim_out, *, sigma_emb_dim=None, groups=32, shift_scale=False):
+class ResnetBlock(LightningModule):
+    def __init__(self, dim, dim_out, *, sigma_emb_dim=None, groups=32, shift_scale=False, scaling_factor=None):
         super().__init__()
         self.shift_scale = shift_scale
         self.mlp = nn.Sequential(
@@ -133,6 +134,11 @@ class ResnetBlock(nn.Module):
         # self.res_conv = nn.Conv1d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
         self.lin_layer = nn.Linear(
             dim, dim_out) if dim != dim_out else nn.Identity()
+        
+        if scaling_factor is None:
+            self.scaling_factor = 1.0
+        else:
+            self.scaling_factor = 2**(-scaling_factor/2)
 
     def forward(self, x, time_emb=None):
 
@@ -146,11 +152,11 @@ class ResnetBlock(nn.Module):
 
         h = self.block2(h)
 
-        out = h + self.lin_layer(x)
+        out = h + self.lin_layer(x)*self.scaling_factor
 
         return out
 
-class EmbeddingLayer(nn.Module):
+class EmbeddingLayer(LightningModule):
     def __init__(self, dim, vocab_dim):
         """
         Mode arg: 0 -> use a learned layer, 1 -> use eigenvectors, 
@@ -164,7 +170,7 @@ class EmbeddingLayer(nn.Module):
         return self.embedding[x]
 
 
-class UnetMLP_simple(nn.Module):
+class UnetMLP_simple(LightningModule):
     def __init__(
         self,
         config
@@ -178,6 +184,9 @@ class UnetMLP_simple(nn.Module):
         self.resnet_block_groups = config.model.resnet_block_groups
         self.sigma_dim = config.model.sigma_dim
         self.dim_mults = config.model.dim_mults
+
+        self.is_parametric_marginal = config.is_parametric_marginal
+        self.use_marginal_flag = config.use_marginal_flag
 
         try:
             self.vocab_size = self.alphabet_size + (1 if self.absorb else 0)
@@ -195,8 +204,13 @@ class UnetMLP_simple(nn.Module):
         self.embedding_layer = EmbeddingLayer(init_dim, self.vocab_size)
         self.p_enc_1d_model_sum = Summer(PositionalEncoding1D(init_dim))
 
+        if self.is_parametric_marginal and self.use_marginal_flag:
+            sigma_init_dim = 2
+        else:
+            sigma_init_dim = 1
+
         self.sigma_mlp = nn.Sequential(
-            nn.Linear(1, self.sigma_dim),
+            nn.Linear(sigma_init_dim, self.sigma_dim),
             nn.GELU(),
             nn.Linear(self.sigma_dim, self.sigma_dim)
         )
@@ -211,7 +225,12 @@ class UnetMLP_simple(nn.Module):
         for ind, (dim_in, dim_out) in enumerate(in_out):
             is_last = ind >= (num_resolutions - 1)
 
-            module = nn.ModuleList([block_klass(dim_in, dim_in, sigma_emb_dim=self.sigma_dim),
+            if config.model.scaling_factor is None:
+                scaling_factor = None
+            else:
+                scaling_factor = config.model.scaling_factor * ind
+
+            module = nn.ModuleList([block_klass(dim_in, dim_in, sigma_emb_dim=self.sigma_dim, scaling_factor=scaling_factor),
                                     #        block_klass(dim_in, dim_in, sigma_emb_dim = sigma_dim)
                                     ])
 
@@ -250,12 +269,21 @@ class UnetMLP_simple(nn.Module):
             self.proj
         )
 
-    def forward(self, indices, sigma, is_marginal=False, std=None):
+    def forward(self, indices, sigma, marginal_flag=None, std=None):
         sigma = sigma.reshape(sigma.size(0), 1)
         x = self.embedding_layer(indices)
         x = self.p_enc_1d_model_sum(x)
 
         r = x.clone()
+
+        if self.is_parametric_marginal and self.use_marginal_flag:
+            assert marginal_flag is not None, "marginal_flag must be provided if is_parametric_marginal is True"
+            marginal_flag = torch.tensor(marginal_flag).float().to(x.device)
+            marginal_flag = marginal_flag.expand(x.size(0), 1)
+            try:
+                sigma = torch.cat((sigma, marginal_flag), dim=-1)
+            except:
+                raise UserWarning(f"Devices: sigma={sigma.device}, marginal_flag={marginal_flag.device}, x={x.device}, indices={indices.device}")
 
         sigma = self.sigma_mlp(sigma).squeeze()
 

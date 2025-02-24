@@ -16,7 +16,7 @@ except:
 
     from catsample import sample_categorical
 
-def get_graph(config, device):
+def get_graph(config):
     try:
         if config.graph.type == "uniform":
             return Uniform(config.alphabet_size)

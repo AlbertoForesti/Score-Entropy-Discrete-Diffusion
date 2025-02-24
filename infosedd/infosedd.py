@@ -2,6 +2,9 @@ import pytorch_lightning as pl
 import torch
 import numpy as np
 import math
+import os
+from datetime import datetime
+from hydra.utils import instantiate, call
 
 try:
     from infosedd import sampling
@@ -16,7 +19,7 @@ try:
     from infosedd.model.unetmlp import UnetMLP_simple
     from infosedd.model.two_sedds import DoubleSEDD
 
-    from infosedd.utils import array_to_dataset
+    from infosedd.utils import array_to_dataset, get_infinite_loader
 except:
     import sampling
     import graph_lib
@@ -30,7 +33,7 @@ except:
     from model.unetmlp import UnetMLP_simple
     from model.two_sedds import DoubleSEDD
 
-    from utils import array_to_dataset
+    from utils import array_to_dataset, get_infinite_loader
 
 from transformers import get_linear_schedule_with_warmup, get_constant_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup
 
@@ -46,10 +49,12 @@ class InfoSEDD(pl.LightningModule):
         else:
             self.gt = None
         self.save_hyperparameters("args")
-        self.mutinfo_config = None
 
         args = self.args
         CHECKPOINT_DIR = args.training.checkpoint_dir
+        # Add date and time to checkpoint directory
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        CHECKPOINT_DIR = os.path.join(CHECKPOINT_DIR, timestamp)
 
         logger=pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
         
@@ -62,9 +67,11 @@ class InfoSEDD(pl.LightningModule):
                          check_val_every_n_epoch=None,
                          val_check_interval=self.args.training.val_check_interval,
                          gradient_clip_val=self.args.optim.gradient_clip_val,
-                         accumulate_grad_batches=self.args.training.accum,)  
+                         accumulate_grad_batches=self.args.training.accum,
+                         limit_val_batches=self.args.mc_estimates,)
     
     def configure_optimizers(self):
+        self.ema.set_device(self.score_model.device)
         optimizer = torch.optim.AdamW(self.score_model.parameters(), lr=self.args.optim.lr, betas=(self.args.optim.beta1, self.args.optim.beta2), eps=self.args.optim.eps,
                                weight_decay=self.args.optim.weight_decay)
         # Total number of training steps
@@ -90,6 +97,7 @@ class InfoSEDD(pl.LightningModule):
 
         self.entropy_estimate = None
         self.mutinfo_estimate = None
+        self.oinfo_estimate = None
 
         data_set = array_to_dataset(x)
 
@@ -103,24 +111,35 @@ class InfoSEDD(pl.LightningModule):
 
         if self.entropy_estimate is not None:
             ret_dict["entropy"] = self.entropy_estimate
+        
+        if self.oinfo_estimate is not None:    
+            ret_dict["oinfo"] = self.oinfo_estimate
 
         return ret_dict
 
-    def call_mutinfo(self, x: np.ndarray, y: np.ndarray):
+    def call_mutinfo(self, x: np.ndarray, y: np.ndarray, config_override=None):
         self.args["seq_length"] = x.shape[1] + y.shape[1]
         if self.args["alphabet_size"] is None:
             self.args["alphabet_size"] = max(np.max(x), np.max(y)) + 1
         self.mutinfo_estimate = None
         self.entropy_estimate = None
+        self.oinfo_estimate = None
 
-        self.mutinfo_config = dict()
-        self.mutinfo_config["x_indices"] = list(range(x.shape[1]))
-        self.mutinfo_config["y_indices"] = list(range(x.shape[1], x.shape[1] + y.shape[1]))
+        if config_override is not None:
+            self.args.update(config_override)
+        
+        if hasattr(self.args, "checkpoint_path"):
+            self.model = InfoSEDD.load_from_checkpoint(self.args.checkpoint_path)
+
+        setattr(self.args, "x_indices", list(range(x.shape[1])))
+        setattr(self.args, "y_indices", list(range(x.shape[1], x.shape[1] + y.shape[1])))
 
         data_set = array_to_dataset(x, y)
         self.train_loader = DataLoader(data_set, batch_size=self.args.training.batch_size, shuffle=True)
+        self.valid_loader = DataLoader(data_set, batch_size=self.args.training.batch_size, shuffle=False)
+        self.valid_loader = get_infinite_loader(self.valid_loader)
 
-        self.fit(self.train_loader)
+        self.fit(self.train_loader, self.valid_loader)
 
         ret_dict = {}
 
@@ -128,14 +147,10 @@ class InfoSEDD(pl.LightningModule):
             ret_dict["mi"] = self.mutinfo_estimate
         if self.entropy_estimate is not None:
             ret_dict["entropy"] = self.entropy_estimate
+        if self.oinfo_estimate is not None:
+            ret_dict["oinfo"] = self.oinfo_estimate
 
         return ret_dict
-    
-    def estimate_information_quantities(self, score_model, dataloader):
-        if self.args.estimate_entropy:
-            self.entropy_estimate = self.entropy_estimate_dynkin_fn(score_model, dataloader)            
-        if self.args.estimate_mutinfo:
-            self.mutinfo_estimate = self.mutinfo_estimate_dynkin_fn(score_model, dataloader)
     
     def fit(self,train_loader,test_loader=None):
 
@@ -145,6 +160,9 @@ class InfoSEDD(pl.LightningModule):
         if self.args.resume_training:
             self.trainer.fit(model=self, train_dataloaders=train_loader,
                 val_dataloaders=test_loader)
+    
+    def predict(self,predict_loader):
+        self.trainer.predict(model=self, dataloaders=predict_loader)
     
     def setup(self, stage=None):
         # build score model
@@ -158,11 +176,17 @@ class InfoSEDD(pl.LightningModule):
             score_model = SEDD(self.args)
         self.score_model = score_model
 
+        if hasattr(self.args, 'get_proj_fn'):
+            assert self.args.proj_fn is not None, "get_proj_fn cannot be None"
+            proj_fn = call(self.args.get_proj_fn)
+        else:
+            proj_fn = lambda x: x
+
         if self.args.checkpoint_path is not None:
             try:
                 self.load_from_checkpoint(self.args.checkpoint_path)
             except:
-                self.score_model = SEDD.from_pretrained(self.args.checkpoint_path).to(self.device)
+                self.score_model = SEDD.from_pretrained(self.args.checkpoint_path)
 
         # Initialize weights with xavier uniform
         for p in self.score_model.parameters():
@@ -174,29 +198,15 @@ class InfoSEDD(pl.LightningModule):
         score_model.parameters(), decay=self.args.training.ema)
 
         self.noise = noise_lib.get_noise(self.args)
-        device = self.device
         sampling_eps = self.args.sampling.eps
 
-        graph = graph_lib.get_graph(self.args, device)
+        graph = graph_lib.get_graph(self.args)
         noise = noise_lib.get_noise(self.args)
 
         try:
             seq_length = self.args.seq_length
         except:
             seq_length = self.args.model.seq_length
-
-        if self.args.cond is not None:
-            input_ids = torch.tensor(self.args.cond.input_ids, device=device).long()
-            input_locs = torch.tensor(self.args.cond.input_locs, device=device).long()
-            indeces_to_discard = list(input_locs)
-            indeces_to_keep = [i for i in range(seq_length) if i not in indeces_to_discard]
-        
-            def proj_fun(x):
-                x[:, input_locs] = input_ids
-                return x
-        else:
-            indeces_to_keep = None
-            proj_fun = lambda x: x
         
         if hasattr(self.args, 'data'):
             p = data.get_distribution(self.args.data)
@@ -204,7 +214,7 @@ class InfoSEDD(pl.LightningModule):
             p = None
 
         if isinstance(p, np.ndarray):
-            p = torch.tensor(p, device=device).float()
+            p = torch.tensor(p).float()
         
         if p is not None:
             p_joint = p.clone()
@@ -219,51 +229,73 @@ class InfoSEDD(pl.LightningModule):
             self.joint_score_fn = None
 
         self.sampling_shape = (self.args.training.batch_size // (self.args.ngpus * self.args.training.accum), seq_length)
-        self.sampling_fn = sampling.get_sampling_fn(self.args, graph, noise, self.sampling_shape, sampling_eps, device, p)
-        self.entropy_estimate_dynkin_fn = sampling.get_entropy_dynkin_estimate_fn(self.args, graph, noise, self.sampling_shape, sampling_eps, device, p, proj_fun, indeces_to_keep)
+        self.sampling_fn = sampling.get_sampling_fn(self.args, graph, noise, self.sampling_shape, sampling_eps, p)
         
         if self.args.estimate_mutinfo:
-            try:
-                x_indices = self.mutinfo_config["x_indices"]
-                y_indices = self.mutinfo_config["y_indices"]
-            except:
-                raise UserWarning(f"Mutual information config is {self.mutinfo_config}")
-            self.mutinfo_estimate_dynkin_fn = sampling.get_mutinfo_dynkin_estimate_fn(self.args, graph, noise, self.sampling_shape, sampling_eps, device, x_indices, y_indices, p, proj_fun, indeces_to_keep)
+            self.mutinfo_step_fn = sampling.get_mutinfo_step_fn(self.args, graph, noise, proj_fn)
+            self.ema_mutinfo = ExponentialMovingAverage(
+                torch.nn.Parameter(torch.tensor([0.0]), requires_grad=True), decay=self.args.training.ema)
+        
+        if self.args.estimate_entropy:
+            self.entropy_step_fn = sampling.get_entropy_step_fn(self.args, graph, noise, proj_fn)
+            self.ema_entropy = ExponentialMovingAverage(
+                torch.nn.Parameter(torch.tensor([0.0]), requires_grad=True), decay=self.args.training.ema)
+        
+        if self.args.estimate_oinfo:
+            self.oinfo_step_fn = sampling.get_oinfo_step_fn(self.args, graph, noise, proj_fn)
+            self.ema_oinfo = ExponentialMovingAverage(
+                torch.nn.Parameter(torch.tensor([0.0]), requires_grad=True), decay=self.args.training.ema)
+            
 
         self.noise = noise
         self.graph = graph
 
-        if self.args.estimate_entropy and not self.args.estimate_mutinfo:
-            p_marginal = 0
-            mutinfo_config = None
-        else:
-            p_marginal = self.args.training.p_marginal
-            mutinfo_config = self.mutinfo_config
-
-        self.loss_fn_train = losses.get_loss_fn(self.noise, self.graph, True, sampling_eps, False, mutinfo_config, self.marginal_score_fn, self.joint_score_fn, p_marginal)
-        self.loss_fn_test = losses.get_loss_fn(self.noise, self.graph, False, sampling_eps, False, mutinfo_config, self.marginal_score_fn, self.joint_score_fn, p_marginal)
+        self.loss_fn_train = losses.get_loss_fn(self.args, self.noise, self.graph, True, sampling_eps)
+        self.loss_fn_test = losses.get_loss_fn(self.args, self.noise, self.graph, False, sampling_eps)
 
         self.entropy_estimate = None
         self.mutinfo_estimate = None
-        self.score_model.to(self.device)
-        self.noise.to(self.device)
+        self.oinfo_estimate = None
     
     def training_step(self, batch, batch_idx):
         self.train()
-        loss = self.loss_fn_train(self.score_model, batch, cond=None).mean()
-        if self.joint_score_fn is not None and self.marginal_score_fn is not None and self.debug:
-            if np.random.rand() < 1e-3:
-                log_score_joint_fn = lambda x, s: self.joint_score_fn(x, s).log()
-                min_loss_joint = self.loss_fn_train(log_score_joint_fn, batch, cond=None).mean()
-                log_score_marginal_fn = lambda x, s: self.marginal_score_fn(x, s).log()
-                min_loss_marginal = self.loss_fn_train(log_score_marginal_fn, batch, cond=None).mean()
-                print(f"Analytic loss joint: {min_loss_joint}, Analytic loss marginal: {min_loss_marginal}, Estimated loss: {loss}")
+        loss = self.loss_fn_train(self.score_model, batch).mean()
+
+        ret_dict = {}
+        ret_dict["loss"] = loss
+
+        if self.args.estimate_mutinfo:
+            mutinfo_estimate = self.mutinfo_step_fn(self.score_model, batch)
+            mutinfo_estimate = torch.tensor(mutinfo_estimate)
+            self.ema_mutinfo.update([torch.nn.Parameter(mutinfo_estimate, requires_grad=True)])
+            ema_estimate = self.ema_mutinfo.shadow_params[0].item()
+            ret_dict["ema_mutinfo"] = ema_estimate
+            self.log("ema_mutinfo", ema_estimate, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+            self.logger.experiment.add_scalar("ema_mutinfo", ema_estimate, self.global_step)
+        
+        if self.args.estimate_oinfo:
+            oinfo_estimate = self.oinfo_step_fn(self.score_model, batch)
+            oinfo_estimate = torch.tensor(oinfo_estimate)
+            self.ema_oinfo.update([torch.nn.Parameter(oinfo_estimate, requires_grad=True)])
+            ema_estimate = self.ema_oinfo.shadow_params[0].item()
+            ret_dict["ema_oinfo"] = ema_estimate
+            self.log("ema_oinfo", ema_estimate, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+            self.logger.experiment.add_scalar("ema_oinfo", ema_estimate, self.global_step)
+
+        if self.args.estimate_entropy:
+            entropy_estimate = self.entropy_step_fn(self.score_model, batch)
+            entropy_estimate = torch.tensor(entropy_estimate)
+            self.ema_entropy.update([torch.nn.Parameter(entropy_estimate, requires_grad=True)])
+            ema_estimate = self.ema_entropy.shadow_params[0].item()
+            ret_dict["ema_entropy"] = ema_estimate
+            self.log("ema_entropy", ema_estimate, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+            self.logger.experiment.add_scalar("ema_entropy", ema_estimate, self.global_step)
+
         self.logger.experiment.add_scalar("train_loss", loss, self.global_step)
-        return {"loss": loss}
+        return ret_dict
     
     def on_after_backward(self):
         # This hook is called after the backward pass
-        self.ema.set_device(self.device)
         self.ema.update(self.score_model.parameters())
     
     def on_save_checkpoint(self, checkpoint):
@@ -277,12 +309,57 @@ class InfoSEDD(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         self.eval()
+        ret_dict = {}
         with torch.no_grad():
-            self.ema.store(self.score_model.parameters())
-            self.ema.copy_to(self.score_model.parameters())
-            loss = self.loss_fn_test(self.score_model, batch, cond=None).mean()
-            self.ema.restore(self.score_model.parameters())
-            return {"loss": loss}
+            loss = self.loss_fn_test(self.score_model, batch).mean()
+            ret_dict["loss"] = loss
+            if self.args.estimate_mutinfo:
+                mutinfo = self.mutinfo_step_fn(self.score_model, batch)
+                ret_dict["mutinfo"] = mutinfo
+                self.mutinfo_step_estimates.append(mutinfo)
+            if self.args.estimate_oinfo:
+                oinfo = self.oinfo_step_fn(self.score_model, batch)
+                ret_dict["oinfo"] = oinfo
+            if self.args.estimate_entropy:
+                entropy = self.entropy_step_fn(self.score_model, batch)
+                ret_dict["entropy"] = entropy
+        return ret_dict
+    
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        self.eval()
+        ret_dict = {}
+        with torch.no_grad():
+            if self.args.estimate_mutinfo:
+                mutinfo = self.mutinfo_step_fn(self.score_model, batch)
+                ret_dict["mutinfo"] = mutinfo
+                self.mutinfo_step_estimates.append(mutinfo)
+            if self.args.estimate_oinfo:
+                oinfo = self.oinfo_step_fn(self.score_model, batch)
+                ret_dict["oinfo"] = oinfo
+            if self.args.estimate_entropy:
+                entropy = self.entropy_step_fn(self.score_model, batch)
+                ret_dict["entropy"] = entropy
+        return ret_dict
+    
+    def on_prediction_epoch_start(self):
+        self.ema.store(self.score_model.parameters())
+        self.ema.copy_to(self.score_model.parameters())
+        if self.args.estimate_mutinfo:
+            self.mutinfo_step_estimates = []
+        if self.args.estimate_oinfo:
+            self.oinfo_step_estimates = []
+        if self.args.estimate_entropy:
+            self.entropy_step_estimates = []
+    
+    def on_prediction_epoch_end(self):
+        self.ema.restore(self.score_model.parameters())
+
+        if self.args.estimate_mutinfo:
+            self.mutinfo_estimate = np.mean(self.mutinfo_step_estimates)
+        if self.args.estimate_oinfo:
+            self.oinfo_estimate = np.mean(self.oinfo_step_estimates)
+        if self.args.estimate_entropy:
+            self.entropy_estimate = np.mean(self.entropy_step_estimates)
     
     def sample(self, num_samples):
         self.to("cuda")
@@ -294,32 +371,29 @@ class InfoSEDD(pl.LightningModule):
             samples = self.sampling_fn(self.score_model)
         return samples
     
+    def on_validation_epoch_start(self):
+        self.ema.store(self.score_model.parameters())
+        self.ema.copy_to(self.score_model.parameters())
+        if self.args.estimate_mutinfo:
+            self.mutinfo_step_estimates = []
+        if self.args.estimate_oinfo:
+            self.oinfo_step_estimates = []
+        if self.args.estimate_entropy:
+            self.entropy_step_estimates = []
+        
+
     def on_validation_epoch_end(self):
-        self.ema.store(self.score_model.parameters())
-        self.ema.copy_to(self.score_model.parameters())
-        self.estimate_information_quantities(self.score_model, self.train_loader)
-        if self.args.generate_samples:
-            samples = self.sampling_fn(self.score_model)
-            print(samples)
-            if self.args.debug:
-                result = samples[:,-2].cpu().numpy()
-                to_be_xored = torch.cat((samples[:,0:-2], samples[:,-1:]), dim=1).cpu().numpy()
-                other = np.bitwise_xor.reduce(to_be_xored, axis=1)
-                correct_generations = np.sum(result == other)
-                print(correct_generations)
-
         self.ema.restore(self.score_model.parameters())
-        if self.entropy_estimate is not None:
-            self.logger.experiment.add_scalar("val_entropy", self.entropy_estimate, self.global_step)
-        if self.mutinfo_estimate is not None:
+
+        if self.args.estimate_mutinfo:
+            self.mutinfo_estimate = np.mean(self.mutinfo_step_estimates)
             self.logger.experiment.add_scalar("val_mutinfo", self.mutinfo_estimate, self.global_step)
-
-    def on_train_end(self):
-        self.ema.store(self.score_model.parameters())
-        self.ema.copy_to(self.score_model.parameters())
-        self.estimate_information_quantities(self.score_model, self.train_loader)
-        self.ema.restore(self.score_model.parameters())
-        if self.entropy_estimate is not None:
-            self.logger.experiment.add_scalar("final_entropy", self.entropy_estimate, self.global_step)
-        if self.mutinfo_estimate is not None:
-            self.logger.experiment.add_scalar("final_mutinfo", self.mutinfo_estimate, self.global_step)
+            self.log("val_mutinfo", self.mutinfo_estimate, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        if self.args.estimate_oinfo:
+            self.oinfo_estimate = np.mean(self.oinfo_step_estimates)
+            self.logger.experiment.add_scalar("val_oinfo", self.oinfo_estimate, self.global_step)
+            self.log("val_oinfo", self.oinfo_estimate, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        if self.args.estimate_entropy:
+            self.entropy_estimate = np.mean(self.entropy_step_estimates)
+            self.logger.experiment.add_scalar("val_entropy", self.entropy_estimate, self.global_step)
+            self.log("val_entropy", self.entropy_estimate, on_step=False, on_epoch=True, prog_bar=True, logger=True)
