@@ -5,11 +5,38 @@ import math
 import os
 from datetime import datetime
 from hydra.utils import instantiate, call
-import sampling
-import noise_lib
-import losses
-from model.ema import ExponentialMovingAverage
+
+try:
+    from infosedd import sampling
+    from infosedd import graph_lib
+    from infosedd import noise_lib
+    from infosedd import data
+    from infosedd import losses
+
+    from infosedd.model import SEDD
+    from infosedd.model.ema import ExponentialMovingAverage
+    from infosedd.model.mlp import DiffusionMLP
+    from infosedd.model.unetmlp import UnetMLP_simple
+    from infosedd.model.two_sedds import DoubleSEDD
+
+    from infosedd.utils import array_to_dataset, get_infinite_loader
+except:
+    import sampling
+    import graph_lib
+    import noise_lib
+    import data
+    import losses
+
+    from model import SEDD
+    from model.ema import ExponentialMovingAverage
+    from model.mlp import DiffusionMLP
+    from model.unetmlp import UnetMLP_simple
+    from model.two_sedds import DoubleSEDD
+
+    from utils import array_to_dataset, get_infinite_loader
+
 from transformers import get_linear_schedule_with_warmup, get_constant_schedule_with_warmup, get_cosine_with_hard_restarts_schedule_with_warmup
+
 from torch.utils.data import DataLoader
 
 class InfoSEDD(pl.LightningModule):
@@ -17,13 +44,113 @@ class InfoSEDD(pl.LightningModule):
     def __init__(self, args):
         super(InfoSEDD, self).__init__()
         self.args = args
+        if hasattr(self.args, 'gt'):
+            self.gt = self.args.gt
+        else:
+            self.gt = None
         self.save_hyperparameters("args")
+
+        args = self.args
+        CHECKPOINT_DIR = args.training.checkpoint_dir
+        # Add date and time to checkpoint directory
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        CHECKPOINT_DIR = os.path.join(CHECKPOINT_DIR, timestamp)
+
+        logger=pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
+        
+        self.trainer = pl.Trainer(logger=logger,
+                         default_root_dir=CHECKPOINT_DIR,
+                         accelerator=self.args.training.accelerator,
+                         devices=self.args.training.devices,
+                         max_steps=self.args.training.max_steps,
+                         max_epochs=None,
+                         check_val_every_n_epoch=None,
+                         val_check_interval=self.args.training.val_check_interval,
+                         gradient_clip_val=self.args.optim.gradient_clip_val,
+                         accumulate_grad_batches=self.args.training.accum,
+                         limit_val_batches=self.args.mc_estimates,)
     
     def configure_optimizers(self):
         self.ema.set_device(self.score_model.device)
-        optimizer = instantiate(self.args.optim.optimizer, self.score_model.parameters())
-        scheduler = instantiate(self.args.optim.scheduler, optimizer)
+        optimizer = torch.optim.AdamW(self.score_model.parameters(), lr=self.args.optim.lr, betas=(self.args.optim.beta1, self.args.optim.beta2), eps=self.args.optim.eps,
+                               weight_decay=self.args.optim.weight_decay)
+        # Total number of training steps
+        total_steps = self.args.training.max_steps
+        
+        # Number of warmup steps
+        warmup_steps = self.args.optim.warmup
+        
+        # Create the learning rate scheduler
+        scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps, num_cycles=10)
+        
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step'}]
+    
+    def __call__(self, *args):
+        if len(args) == 2:
+            return self.call_mutinfo(*args)
+        elif len(args) == 1:
+            return self.call_entropy(*args)
+        else:
+            raise ValueError("Expected 1 or 2 arguments")
+    
+    def call_entropy(self, x: np.ndarray):
+
+        self.entropy_estimate = None
+        self.mutinfo_estimate = None
+        self.oinfo_estimate = None
+
+        data_set = array_to_dataset(x)
+
+        self.args["seq_length"] = data_set[0].shape[0]
+
+        self.train_loader = DataLoader(data_set, batch_size=self.args.training.batch_size, shuffle=True)
+
+        self.fit(self.train_loader)
+
+        ret_dict = {}
+
+        if self.entropy_estimate is not None:
+            ret_dict["entropy"] = self.entropy_estimate
+        
+        if self.oinfo_estimate is not None:    
+            ret_dict["oinfo"] = self.oinfo_estimate
+
+        return ret_dict
+
+    def call_mutinfo(self, x: np.ndarray, y: np.ndarray, config_override=None):
+        self.args["seq_length"] = x.shape[1] + y.shape[1]
+        if self.args["alphabet_size"] is None:
+            self.args["alphabet_size"] = max(np.max(x), np.max(y)) + 1
+        self.mutinfo_estimate = None
+        self.entropy_estimate = None
+        self.oinfo_estimate = None
+
+        if config_override is not None:
+            self.args.update(config_override)
+        
+        if hasattr(self.args, "checkpoint_path"):
+            self.model = InfoSEDD.load_from_checkpoint(self.args.checkpoint_path)
+
+        setattr(self.args, "x_indices", list(range(x.shape[1])))
+        setattr(self.args, "y_indices", list(range(x.shape[1], x.shape[1] + y.shape[1])))
+
+        data_set = array_to_dataset(x, y)
+        self.train_loader = DataLoader(data_set, batch_size=self.args.training.batch_size, shuffle=True)
+        self.valid_loader = DataLoader(data_set, batch_size=self.args.training.batch_size, shuffle=False)
+        self.valid_loader = get_infinite_loader(self.valid_loader)
+
+        self.fit(self.train_loader, self.valid_loader)
+
+        ret_dict = {}
+
+        if self.mutinfo_estimate is not None:
+            ret_dict["mi"] = self.mutinfo_estimate
+        if self.entropy_estimate is not None:
+            ret_dict["entropy"] = self.entropy_estimate
+        if self.oinfo_estimate is not None:
+            ret_dict["oinfo"] = self.oinfo_estimate
+
+        return ret_dict
     
     def fit(self,train_loader,test_loader=None):
 
@@ -38,13 +165,28 @@ class InfoSEDD(pl.LightningModule):
         self.trainer.predict(model=self, dataloaders=predict_loader)
     
     def setup(self, stage=None):
-        self.score_model = instantiate(self.args.model, self.args)
+        # build score model
+        if self.args.model.name == "mlp":
+            score_model = DiffusionMLP(self.args)
+        elif self.args.model.name == "unetmlp":
+            score_model = UnetMLP_simple(self.args)
+        elif "double" in self.args.model.name:
+            score_model = DoubleSEDD(self.args)
+        else:
+            score_model = SEDD(self.args)
+        self.score_model = score_model
 
         if hasattr(self.args, 'get_proj_fn'):
             assert self.args.proj_fn is not None, "get_proj_fn cannot be None"
             proj_fn = call(self.args.get_proj_fn)
         else:
             proj_fn = lambda x: x
+
+        if self.args.checkpoint_path is not None:
+            try:
+                self.load_from_checkpoint(self.args.checkpoint_path)
+            except:
+                self.score_model = SEDD.from_pretrained(self.args.checkpoint_path)
 
         # Initialize weights with xavier uniform
         for p in self.score_model.parameters():
@@ -53,25 +195,60 @@ class InfoSEDD(pl.LightningModule):
 
 
         self.ema = ExponentialMovingAverage(
-        self.score_model.parameters(), decay=self.args.training.ema)
+        score_model.parameters(), decay=self.args.training.ema)
 
         self.noise = noise_lib.get_noise(self.args)
         sampling_eps = self.args.sampling.eps
+
+        graph = graph_lib.get_graph(self.args)
+        noise = noise_lib.get_noise(self.args)
+
+        try:
+            seq_length = self.args.seq_length
+        except:
+            seq_length = self.args.model.seq_length
+        
+        if hasattr(self.args, 'data'):
+            p = data.get_distribution(self.args.data)
+        else:
+            p = None
+
+        if isinstance(p, np.ndarray):
+            p = torch.tensor(p).float()
+        
+        if p is not None:
+            p_joint = p.clone()
+            px = torch.sum(p, axis=1)
+            py = torch.sum(p, axis=0)
+            pxy_margin = px * py.T
+            pxy_margin = pxy_margin.unsqueeze(-1)
+            self.marginal_score_fn = lambda x, sigma: graph.get_analytic_score(x, pxy_margin, sigma)
+            self.joint_score_fn = lambda x, sigma: graph.get_analytic_score(x, p_joint, sigma)
+        else:
+            self.marginal_score_fn = None
+            self.joint_score_fn = None
+
+        self.sampling_shape = (self.args.training.batch_size // (self.args.ngpus * self.args.training.accum), seq_length)
+        self.sampling_fn = sampling.get_sampling_fn(self.args, graph, noise, self.sampling_shape, sampling_eps, p)
         
         if self.args.estimate_mutinfo:
-            self.mutinfo_step_fn = sampling.get_mutinfo_step_fn(self.args, self.graph, self.noise, proj_fn)
+            self.mutinfo_step_fn = sampling.get_mutinfo_step_fn(self.args, graph, noise, proj_fn)
             self.ema_mutinfo = ExponentialMovingAverage(
                 torch.nn.Parameter(torch.tensor([0.0]), requires_grad=True), decay=self.args.training.ema)
         
         if self.args.estimate_entropy:
-            self.entropy_step_fn = sampling.get_entropy_step_fn(self.args, self.graph, self.noise, proj_fn)
+            self.entropy_step_fn = sampling.get_entropy_step_fn(self.args, graph, noise, proj_fn)
             self.ema_entropy = ExponentialMovingAverage(
                 torch.nn.Parameter(torch.tensor([0.0]), requires_grad=True), decay=self.args.training.ema)
         
         if self.args.estimate_oinfo:
-            self.oinfo_step_fn = sampling.get_oinfo_step_fn(self.args, self.graph, self.noise, proj_fn)
+            self.oinfo_step_fn = sampling.get_oinfo_step_fn(self.args, graph, noise, proj_fn)
             self.ema_oinfo = ExponentialMovingAverage(
                 torch.nn.Parameter(torch.tensor([0.0]), requires_grad=True), decay=self.args.training.ema)
+            
+
+        self.noise = noise
+        self.graph = graph
 
         self.loss_fn_train = losses.get_loss_fn(self.args, self.noise, self.graph, True, sampling_eps)
         self.loss_fn_test = losses.get_loss_fn(self.args, self.noise, self.graph, False, sampling_eps)
