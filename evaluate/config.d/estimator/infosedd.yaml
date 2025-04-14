@@ -39,8 +39,7 @@ estimator:
       ema: 0.999
       checkpoint_dir: "infosedd/checkpoints_ema_mutinfo"
       accelerator: "gpu"
-      devices: [7]
-      devices: [3]
+      devices: [2]
       max_steps: 100001
       val_check_interval: 5000
       p_marginal: 0.5

@@ -7,9 +7,12 @@ import math
 try:
     from infosedd.model import utils as mutils
     from infosedd.utils import statistics_batch
+    from infosedd.sampling import get_mutinfo_step_fn
+    from infosedd import noise_lib
 except:
     from model import utils as mutils
     from utils import statistics_batch
+    from sampling import get_mutinfo_step_fn
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -71,8 +74,25 @@ def get_loss_fn(configs, noise, graph, train, sampling_eps=1e-3):
         loss = (dsigma[:, None] * loss).sum(dim=-1)
 
         return loss
-
+    
+    def feature_selection_loss_fn(model,batch):
+        mutinfo_step_fn = get_mutinfo_step_fn(configs, graph, noise)
+        
+        mutinfo = mutinfo_step_fn(model, batch)
+        noise_norm = noise.noise_norm()
+        loss = -mutinfo - configs.regularizing_term * noise_norm / len(noise.noise)
+        assert torch.isnan(torch.tensor([mutinfo])).sum() == 0, f"mutinfo is NaN: {loss}"
+        assert torch.isnan(noise_norm).sum() == 0, f"Noise norm is NaN: {loss}"
+        assert torch.isnan(loss).sum() == 0, f"Loss is NaN: {loss}"
+        return loss
+    
+    if configs.feature_selection:
+        assert isinstance(noise, noise_lib.LearnableNoise), f"Feature selection is only supported with learnable noise, instead got {type(noise)}"
+        loss_fn = feature_selection_loss_fn
+    else:
+        loss_fn = loss_fn
     return loss_fn
+
 
 def get_optimizer(config, params):
     if config.optim.optimizer == 'Adam':

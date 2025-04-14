@@ -159,13 +159,25 @@ def get_infinite_loader(loader):
         
         def __len__(self):
             return np.inf
+        
+        @property
+        def dataset(self):
+            return self.dataloader.dataset
     
     return InfiniteDataLoader(loader)
 
-def get_proj_fn(input_ids, input_locs):
+def get_proj_fn(indices, values):
 
-    def proj_fn(x):
-        x[:, input_ids] = input_locs
+    def proj_fn(x, is_score=False):
+
+        if is_score:
+            # Return the complement of indices
+            complement_indices = np.setdiff1d(np.arange(x.shape[1]), indices)
+            x = x[:, complement_indices]
+            return x
+
+        values_t = torch.tensor(values).to(x)
+        x[:, indices] = values_t
         return x
 
     return proj_fn

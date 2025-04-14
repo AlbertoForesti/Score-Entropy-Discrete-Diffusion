@@ -1,2 +1,2 @@
 export HYDRA_FULL_ERROR=1
-python -m run --config-name config --multirun +estimator=[infosedd] +distribution=[categorical_long_vector]
+python -m run --config-name config_genomics --multirun +estimator=[infosedd] +distribution=[humanvsworm] distribution.p_random=0.5

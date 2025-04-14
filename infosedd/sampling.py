@@ -90,7 +90,7 @@ class EulerPredictor(Predictor):
 
         rev_rate = step_size * dsigma[..., None] * self.graph.reverse_rate(x, score)
         new_x = self.graph.sample_rate(x, rev_rate)
-        new_x = proj_fn(new_x)
+        new_x = proj_fn(new_x, is_score=False)
 
         probs = F.one_hot(x, num_classes=self.graph.dim).to(rev_rate) + rev_rate
 
@@ -141,7 +141,7 @@ class EulerPredictor(Predictor):
 
         rev_rate_joint = step_size * dsigma[..., None] * self.graph.reverse_rate(x, score_joint)
         new_x = self.graph.sample_rate(x, rev_rate_joint)
-        new_x = proj_fn(new_x)
+        new_x = proj_fn(new_x, is_score=False)
 
         probs_joint = F.one_hot(x, num_classes=self.graph.dim).to(rev_rate_joint) + rev_rate_joint
 
@@ -219,7 +219,7 @@ class AnalyticPredictor(Predictor):
         stag_score = self.graph.staggered_score(score, dsigma)
         probs = stag_score * self.graph.transp_transition(x, dsigma)
         new_x = sample_categorical(probs)
-        new_x = proj_fn(new_x)
+        new_x = proj_fn(new_x,is_score=False)
 
         stag_score_uniform = self.graph.staggered_score(uniform_score, dsigma)
         probs_uniform = stag_score_uniform * self.graph.transp_transition(x, dsigma)
@@ -269,9 +269,9 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device, p=None):
     
     return sampling_fn
 
-def get_mutinfo_step_fn(config, graph, noise, proj_fn = lambda x: x):
+def get_mutinfo_step_fn(config, graph, noise, proj_fn = lambda x, is_score: x):
 
-    def mutinfo_step_fn(model, batch):
+    def mutinfo_step_fn(model, batch, return_noise=False):
         if config.is_parametric_marginal:
             score_fn_x = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=0)
             score_fn_y = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=1)
@@ -284,7 +284,11 @@ def get_mutinfo_step_fn(config, graph, noise, proj_fn = lambda x: x):
             
             # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
             perturbed_batch = graph.sample_transition(batch, sigma)
-            perturbed_batch = proj_fn(perturbed_batch)
+
+            if config.feature_selection:
+                sigma, dsigma = noise.base_noise(t)
+
+            perturbed_batch = proj_fn(perturbed_batch, is_score=False)
 
             perturbed_batch_x = perturbed_batch.clone()
             perturbed_batch_x[:, config.y_indices] = graph.dim - 1
@@ -310,6 +314,9 @@ def get_mutinfo_step_fn(config, graph, noise, proj_fn = lambda x: x):
 
             score_marginal = torch.cat([score_marginal_x, score_marginal_y], dim=1)
 
+            score_marginal = proj_fn(score_marginal, is_score=True)
+            score_joint = proj_fn(score_joint, is_score=True)
+
             score_marginal = torch.where(torch.isnan(score_marginal), torch.ones_like(score_marginal), score_marginal)
             score_joint = torch.where(torch.isnan(score_joint), torch.ones_like(score_joint), score_joint)
 
@@ -320,7 +327,9 @@ def get_mutinfo_step_fn(config, graph, noise, proj_fn = lambda x: x):
             score_joint = torch.where(score_joint<1e-5, 1e-5*torch.ones_like(score_joint), score_joint)
             
             # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
+            perturbed_batch = proj_fn(perturbed_batch, is_score=True)
             divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
+            
             return divergence_estimate.mean().item()
     
     return mutinfo_step_fn
@@ -383,7 +392,7 @@ def get_oinfo_step_fn(config, graph, noise):
             return o_info
     return oinfo_step_fn
 
-def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, p=None):
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cuda'), proj_fun=lambda x: x, p=None):
     predictor = get_predictor(predictor)(graph, noise)
     projector = proj_fun
     denoiser = Denoiser(graph, noise)
@@ -391,10 +400,10 @@ def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps
     @torch.no_grad()
     def pc_sampler(model):
         if p is None:
-            sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True, is_marginal=False)
+            sampling_score_fn = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=None, scorify=True)
         else:
             sampling_score_fn = lambda x, s: graph.get_analytic_score(x, p, s)
-        x = graph.sample_limit(*batch_dims)
+        x = graph.sample_limit(*batch_dims).to(device)
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
 

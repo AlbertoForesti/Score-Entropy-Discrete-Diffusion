@@ -270,7 +270,7 @@ class UnetMLP_simple(LightningModule):
         )
 
     def forward(self, indices, sigma, marginal_flag=None, std=None):
-        sigma = sigma.reshape(sigma.size(0), 1)
+        sigma = sigma.reshape(sigma.size(0), -1)
         x = self.embedding_layer(indices)
         x = self.p_enc_1d_model_sum(x)
 

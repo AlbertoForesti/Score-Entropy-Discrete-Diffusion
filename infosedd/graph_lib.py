@@ -469,7 +469,10 @@ class Absorbing(Graph):
 
     def sample_transition(self, i, sigma):
         move_chance = 1 - (-sigma).exp()
-        move_indices = torch.rand(*i.shape, device=i.device) < move_chance
+        try:
+            move_indices = torch.rand(*i.shape, device=i.device) < move_chance
+        except:
+            raise ValueError(f"Incompatible shapes: {i.shape} and {sigma.shape}")
         i_pert = torch.where(move_indices, self.dim - 1, i)
         return i_pert
     

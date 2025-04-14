@@ -71,3 +71,68 @@ class LogLinearNoise(Noise, nn.Module):
     def total_noise(self, t):
         return -torch.log1p(-(1 - self.eps) * t)
 
+class CosineSquaredNoise(Noise, nn.Module):
+    """
+    Cosine squared noise schedule
+    """
+    def __init__(self):
+        super().__init__()
+    
+    def rate_noise(self, t):
+        return -np.pi  * torch.tan(np.pi / 2 * (1-t))
+    
+    def total_noise(self, t):
+        return -torch.log(torch.pow(torch.cos((1-t) * np.pi / 2), 2))
+
+class CosineNoise(Noise, nn.Module):
+    """
+    Cosine noise schedule
+    """
+    def __init__(self):
+        super().__init__()
+    
+    def total_noise(self, t):
+        return -torch.log(torch.cos((1-t) * np.pi / 2))
+    
+    def rate_noise(self, t):
+        return -np.pi / 2 * torch.tan(np.pi / 2 * (1-t))
+
+class LinearNoise(Noise, nn.Module):
+    """
+    Linear noise schedule
+    """
+    def __init__(self, sigma_max=1):
+        super().__init__()
+        self.empty = nn.Parameter(torch.tensor(0.0))
+        self.sigma_max = sigma_max
+
+    def rate_noise(self, t):
+        return self.sigma_max
+
+    def total_noise(self, t):
+        return self.sigma_max*t
+
+class LearnableNoise(Noise):
+
+  def __init__(self, base_noise, vocab_size):
+    super().__init__()
+    self.base_noise = base_noise
+    self.noise = nn.Parameter(torch.zeros(vocab_size))
+    self.vocab_size = vocab_size
+
+  def noise_norm(self):
+    # print(f"noise norm: {torch.norm(torch.sigmoid(self.noise), p=2)}")
+    return torch.norm(torch.sigmoid(self.noise), p=2)  
+  
+  def total_noise(self, t):
+    assert t.ndim == 2, f't should be a 1D tensor, instead got {t.shape} tensor'
+    total_noise = self.base_noise.total_noise(t)
+    total_noise = total_noise.expand(t.size(0), self.vocab_size)
+    mult_factor = (1+torch.sigmoid(self.noise).unsqueeze(0).expand(t.size(0), self.vocab_size))
+    mult_factor[:,-1] = 1
+    total_noise = total_noise * mult_factor
+    return total_noise
+  
+  def rate_noise(self, t, eps=1e-3):
+    rate_noise = self.total_noise(t+eps) - self.total_noise(t)
+    return rate_noise / eps
