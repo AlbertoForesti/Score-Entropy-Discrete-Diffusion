@@ -50,7 +50,7 @@ def get_loss_fn(configs, noise, graph, train, sampling_eps=1e-3):
         
         sigma, dsigma = noise(t)
 
-        if configs.is_parametric_marginal:
+        if configs.is_parametric_marginal and configs.variant == "j":
             marginal_flag = np.random.randint(0, 3)
             if marginal_flag == 0:
                 absorb_indices = configs.x_indices
@@ -58,13 +58,25 @@ def get_loss_fn(configs, noise, graph, train, sampling_eps=1e-3):
                 absorb_indices = configs.y_indices
             else:
                 absorb_indices = None
+        elif configs.is_parametric_marginal and configs.variant == "c":
+            marginal_flag = np.random.randint(0, 2)
+            if marginal_flag == 0:
+                absorb_indices = configs.x_indices
+            else:
+                absorb_indices = None
         else:
             absorb_indices = None
             marginal_flag = None
         
         perturbed_batch = graph.sample_transition(batch, sigma[:, None])
-        if absorb_indices is not None:
-            perturbed_batch[:, absorb_indices] = graph.dim - 1
+        if configs.is_parametric_marginal and configs.variant == "j":
+            if absorb_indices is not None:
+                perturbed_batch[:, absorb_indices] = graph.dim - 1
+        elif configs.is_parametric_marginal and configs.variant == "c":
+            if absorb_indices is not None:
+                perturbed_batch[:, absorb_indices] = batch[:, absorb_indices]
+            else:
+                perturbed_batch[:, absorb_indices] = graph.dim - 1
 
         log_score_fn = mutils.get_score_fn(model, train=train, sampling=False, marginal_flag=marginal_flag)
         log_score = log_score_fn(perturbed_batch, sigma)

@@ -2,7 +2,7 @@
 
 defaults:
 - _self_
-- model: unetmlp
+- model: unetmlp_7k
 
 estimator:
   _target_: infosedd.infosedd.InfoSEDD
@@ -23,7 +23,8 @@ estimator:
     resume_training: True
     checkpoint_path: null
     is_parametric_marginal: True
-    use_marginal_flag: True
+    use_marginal_flag: False
+    variant: j
 
     cond: null
 

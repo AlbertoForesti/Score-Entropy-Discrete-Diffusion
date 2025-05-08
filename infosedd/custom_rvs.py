@@ -45,7 +45,7 @@ class IsingLoaderRandomVariable:
 
 class NumpyLoaderRandomVariable:
 
-    def __init__(self, path):
+    def __init__(self, path, p_random=0):
         if path.endswith(".npz"):
             self.values = np.load(path)["arr_0"]
         elif path.endswith(".gz"):
@@ -53,6 +53,7 @@ class NumpyLoaderRandomVariable:
                 self.values = np.load(f)
         else:
             self.values = np.load(path)
+        self.p_random = p_random
     
     def rvs(self, size=None, random_state=None):
         if len(self.values) < size:
@@ -63,6 +64,11 @@ class NumpyLoaderRandomVariable:
         X = data[:,:-1]
         Y = data[:,-1]
         Y = Y.reshape(-1,1)
+        if self.p_random > 0:
+            Y_random = np.random.randint(np.min(data[:,-1]), np.max(data[:,-1])+1, size=Y.shape)
+            random_indices = np.random.choice(len(data), int(len(data) * self.p_random), replace=False)
+            Y[random_indices] = Y_random[random_indices]
+
         return X, Y
 
 class GenomicBenchmarkRV:

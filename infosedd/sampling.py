@@ -273,9 +273,13 @@ def get_mutinfo_step_fn(config, graph, noise, proj_fn = lambda x, is_score: x):
 
     def mutinfo_step_fn(model, batch, return_noise=False):
         if config.is_parametric_marginal:
-            score_fn_x = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=0)
-            score_fn_y = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=1)
-            score_fn_joint = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=2)
+            if config.variant == "j":
+                score_fn_x = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=0)
+                score_fn_y = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=1)
+                score_fn_joint = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=2)
+            elif config.variant == "c":
+                score_fn_marginal = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=0)
+                score_fn_conditional = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=1)
         else:
             score_fn = mutils.get_score_fn(model, train=False, sampling=True, marginal_flag=None)
         with torch.no_grad():
@@ -290,45 +294,71 @@ def get_mutinfo_step_fn(config, graph, noise, proj_fn = lambda x, is_score: x):
 
             perturbed_batch = proj_fn(perturbed_batch, is_score=False)
 
-            perturbed_batch_x = perturbed_batch.clone()
-            perturbed_batch_x[:, config.y_indices] = graph.dim - 1
+            if config.variant == "j":
 
-            perturbed_batch_y = perturbed_batch.clone()
-            perturbed_batch_y[:, config.x_indices] = graph.dim - 1
+                perturbed_batch_x = perturbed_batch.clone()
+                perturbed_batch_x[:, config.y_indices] = graph.dim - 1
 
-            if config.is_parametric_marginal:
-                try:
+                perturbed_batch_y = perturbed_batch.clone()
+                perturbed_batch_y[:, config.x_indices] = graph.dim - 1
+
+                if config.is_parametric_marginal:
                     score_joint = score_fn_joint(perturbed_batch, sigma)
-                except:
-                    raise UserWarning(f"Device is {sigma.device}, perturbed batch is {perturbed_batch.device}")
-                score_marginal_x = score_fn_x(perturbed_batch_x, sigma)
-                score_marginal_y = score_fn_y(perturbed_batch_y, sigma)
-            else:
-                score_joint = score_fn(perturbed_batch, sigma)
-                score_marginal_x = score_fn(perturbed_batch_x, sigma)
-                score_marginal_y = score_fn(perturbed_batch_y, sigma)
+                    score_marginal_x = score_fn_x(perturbed_batch_x, sigma)
+                    score_marginal_y = score_fn_y(perturbed_batch_y, sigma)
+                else:
+                    score_joint = score_fn(perturbed_batch, sigma)
+                    score_marginal_x = score_fn(perturbed_batch_x, sigma)
+                    score_marginal_y = score_fn(perturbed_batch_y, sigma)
 
-            score_marginal_x = score_marginal_x[:, config.x_indices]
+                score_marginal_x = score_marginal_x[:, config.x_indices]
 
-            score_marginal_y = score_marginal_y[:, config.y_indices]
+                score_marginal_y = score_marginal_y[:, config.y_indices]
 
-            score_marginal = torch.cat([score_marginal_x, score_marginal_y], dim=1)
+                score_marginal = torch.cat([score_marginal_x, score_marginal_y], dim=1)
 
-            score_marginal = proj_fn(score_marginal, is_score=True)
-            score_joint = proj_fn(score_joint, is_score=True)
+                score_marginal = proj_fn(score_marginal, is_score=True)
+                score_joint = proj_fn(score_joint, is_score=True)
 
-            score_marginal = torch.where(torch.isnan(score_marginal), torch.ones_like(score_marginal), score_marginal)
-            score_joint = torch.where(torch.isnan(score_joint), torch.ones_like(score_joint), score_joint)
+                score_marginal = torch.where(torch.isnan(score_marginal), torch.ones_like(score_marginal), score_marginal)
+                score_joint = torch.where(torch.isnan(score_joint), torch.ones_like(score_joint), score_joint)
 
-            score_marginal = torch.where(torch.isinf(score_marginal), torch.ones_like(score_marginal), score_marginal)
-            score_joint = torch.where(torch.isinf(score_joint), torch.ones_like(score_joint), score_joint)
+                score_marginal = torch.where(torch.isinf(score_marginal), torch.ones_like(score_marginal), score_marginal)
+                score_joint = torch.where(torch.isinf(score_joint), torch.ones_like(score_joint), score_joint)
 
-            score_marginal = torch.where(score_marginal<1e-5, 1e-5*torch.ones_like(score_marginal), score_marginal)
-            score_joint = torch.where(score_joint<1e-5, 1e-5*torch.ones_like(score_joint), score_joint)
-            
-            # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
-            perturbed_batch = proj_fn(perturbed_batch, is_score=True)
-            divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
+                score_marginal = torch.where(score_marginal<1e-5, 1e-5*torch.ones_like(score_marginal), score_marginal)
+                score_joint = torch.where(score_joint<1e-5, 1e-5*torch.ones_like(score_joint), score_joint)
+                
+                # raise UserWarning(f"Score joint examples {score_joint[:5]}, x examples {perturbed_batch[:5]}")
+                perturbed_batch = proj_fn(perturbed_batch, is_score=True)
+                divergence_estimate = graph.score_divergence(score_joint, score_marginal, dsigma, perturbed_batch)
+            elif config.variant == "c":
+                perturbed_batch_marginal = perturbed_batch.clone()
+                perturbed_batch_marginal[:, config.x_indices] = graph.dim - 1
+                perturbed_batch_conditional = perturbed_batch.clone()
+                perturbed_batch_conditional[:, config.x_indices] = batch[:, config.x_indices]
+                if config.is_parametric_marginal:
+                    score_marginal = score_fn_marginal(perturbed_batch_marginal, sigma)
+                    score_conditional = score_fn_conditional(perturbed_batch_conditional, sigma)
+                else:
+                    score_marginal = score_fn(perturbed_batch, sigma)
+                    score_conditional = score_fn(perturbed_batch, sigma)
+
+                score_marginal = proj_fn(score_marginal, is_score=True)[:, config.y_indices]
+                score_conditional = proj_fn(score_conditional, is_score=True)[:, config.y_indices]
+
+                score_marginal = torch.where(torch.isnan(score_marginal), torch.ones_like(score_marginal), score_marginal)
+                score_conditional = torch.where(torch.isnan(score_conditional), torch.ones_like(score_conditional), score_conditional)
+
+                score_marginal = torch.where(torch.isinf(score_marginal), torch.ones_like(score_marginal), score_marginal)
+                score_conditional = torch.where(torch.isinf(score_conditional), torch.ones_like(score_conditional), score_conditional)
+
+                score_marginal = torch.where(score_marginal<1e-5, 1e-5*torch.ones_like(score_marginal), score_marginal)
+                score_conditional = torch.where(score_conditional<1e-5, 1e-5*torch.ones_like(score_conditional), score_conditional)
+
+                perturbed_batch = perturbed_batch[:, config.y_indices]
+
+                divergence_estimate = graph.score_divergence(score_conditional, score_marginal, dsigma, perturbed_batch)
             
             return divergence_estimate.mean().item()
     

@@ -43,16 +43,16 @@ class InfoSEDD(pl.LightningModule):
         logger=pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
         
         self.trainer = pl.Trainer(logger=logger,
-                         default_root_dir=CHECKPOINT_DIR,
-                         accelerator=self.args.training.accelerator,
-                         devices=self.args.training.devices,
-                         max_steps=self.args.training.max_steps,
-                         max_epochs=None,
-                         check_val_every_n_epoch=None,
-                         val_check_interval=self.args.training.val_check_interval,
-                         gradient_clip_val=self.args.optim.gradient_clip_val,
-                         accumulate_grad_batches=self.args.training.accum,
-                         limit_val_batches=self.args.mc_estimates,)
+            default_root_dir=CHECKPOINT_DIR,
+            accelerator=self.args.training.accelerator,
+            devices=self.args.training.devices,
+            max_steps=self.args.training.max_steps,
+            max_epochs=None,
+            check_val_every_n_epoch=None,
+            val_check_interval=self.args.training.val_check_interval,
+            gradient_clip_val=self.args.optim.gradient_clip_val,
+            accumulate_grad_batches=self.args.training.accum,
+            limit_val_batches=self.args.mc_estimates,)
     
     def configure_optimizers(self):
         self.ema.set_device(self.score_model.device)
@@ -195,7 +195,7 @@ class InfoSEDD(pl.LightningModule):
             gradient_clip_val=self.args.optim.gradient_clip_val,
             accumulate_grad_batches=self.args.training.accum,
             limit_val_batches=self.args.mc_estimates,)
-
+        
         self.fit(self.train_loader, self.valid_loader)
 
         ret_dict = {}
@@ -211,14 +211,51 @@ class InfoSEDD(pl.LightningModule):
 
         return ret_dict
     
-    def fit(self,train_loader,test_loader=None):
+    def fit(self, train_loader, test_loader=None):
+    # Check if trainer exists or is invalid
+        if not hasattr(self, 'trainer') or self.trainer is None:
+            # Recreate the trainer with the same configuration as in __init__
+            CHECKPOINT_DIR = self.args.training.checkpoint_dir
+            timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            CHECKPOINT_DIR = os.path.join(CHECKPOINT_DIR, timestamp)
+            
+            # Create logger more safely to prevent weak reference errors
+            try:
+                # Try to create logger directly
+                logger = pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
+            except Exception as e:
+                print(f"Warning: Could not create TensorBoardLogger: {e}")
+                # Fallback to using CSV logger which is more reliable
+                logger = pl.loggers.CSVLogger(save_dir=CHECKPOINT_DIR)
+            
+            self.trainer = pl.Trainer(
+                logger=logger,
+                default_root_dir=CHECKPOINT_DIR,
+                accelerator=self.args.training.accelerator,
+                devices=self.args.training.devices,
+                max_steps=self.args.training.max_steps,
+                max_epochs=None,
+                check_val_every_n_epoch=None,
+                val_check_interval=self.args.training.val_check_interval,
+                gradient_clip_val=self.args.optim.gradient_clip_val,
+                accumulate_grad_batches=self.args.training.accum,
+                limit_val_batches=self.args.mc_estimates,
+            )
 
         if test_loader is None:
-            test_loader = DataLoader(train_loader.dataset, batch_size=train_loader.batch_size, shuffle=False, num_workers=train_loader.num_workers)
+            test_loader = DataLoader(
+                train_loader.dataset, 
+                batch_size=train_loader.batch_size, 
+                shuffle=False, 
+                num_workers=getattr(train_loader, 'num_workers', 0)  # Safely get num_workers
+            )
         
-        if self.args.resume_training:
+        if self.args.resume_training and hasattr(self.args, 'checkpoint_path') and self.args.checkpoint_path:
             self.trainer.fit(model=self, train_dataloaders=train_loader,
                 val_dataloaders=test_loader, ckpt_path=self.args.checkpoint_path)
+        else:
+            self.trainer.fit(model=self, train_dataloaders=train_loader,
+                val_dataloaders=test_loader)
     
     def predict(self,predict_loader):
         self.trainer.predict(model=self, dataloaders=predict_loader)
