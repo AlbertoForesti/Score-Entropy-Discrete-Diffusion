@@ -32,34 +32,9 @@ class InfoSEDD(pl.LightningModule):
         self.save_hyperparameters("args")
         self.args = args
 
-        if not hasattr(self.args, "feature_selection"):
-            setattr(self.args, "feature_selection", False)
-
-        CHECKPOINT_DIR = self.args.training.checkpoint_dir
-        # Add date and time to checkpoint directory
-        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        CHECKPOINT_DIR = os.path.join(CHECKPOINT_DIR, timestamp)
-
-        logger=pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
-        
-        self.trainer = pl.Trainer(logger=logger,
-            default_root_dir=CHECKPOINT_DIR,
-            accelerator=self.args.training.accelerator,
-            devices=self.args.training.devices,
-            max_steps=self.args.training.max_steps,
-            max_epochs=None,
-            check_val_every_n_epoch=None,
-            val_check_interval=self.args.training.val_check_interval,
-            gradient_clip_val=self.args.optim.gradient_clip_val,
-            accumulate_grad_batches=self.args.training.accum,
-            limit_val_batches=self.args.mc_estimates,)
-    
     def configure_optimizers(self):
         self.ema.set_device(self.score_model.device)
-        if hasattr(self.args, "feature_selection") and self.args.feature_selection:
-            params = [self.noise.noise]
-        else:
-            params = self.score_model.parameters()
+        params = self.score_model.parameters()
         optimizer = torch.optim.AdamW(params, lr=self.args.optim.lr, betas=(self.args.optim.beta1, self.args.optim.beta2), eps=self.args.optim.eps,
                                weight_decay=self.args.optim.weight_decay)
         # Total number of training steps
@@ -153,94 +128,33 @@ class InfoSEDD(pl.LightningModule):
             param.requires_grad = False
         print("Score model weights frozen.")
     
-    def feature_selection(self, x: np.ndarray, y: np.ndarray, config_override=None):
-        self.args["seq_length"] = x.shape[1] + y.shape[1]
-        self.freeze_score_model()
-        if self.args["alphabet_size"] is None:
-            self.args["alphabet_size"] = max(np.max(x), np.max(y)) + 1
-        self.noise = noise_lib.LearnableNoise(self.noise, self.args.seq_length)
-        self.mutinfo_estimate = None
-        self.entropy_estimate = None
-        self.oinfo_estimate = None
-
-        if config_override is not None:
-            self.args.update(config_override)
-
-        setattr(self.args, "x_indices", list(range(x.shape[1])))
-        setattr(self.args, "y_indices", list(range(x.shape[1], x.shape[1] + y.shape[1])))
-
-        data_set = array_to_dataset(x, y)
-        self.train_loader = DataLoader(data_set, batch_size=self.args.training.batch_size, shuffle=True)
-        self.valid_loader = DataLoader(data_set, batch_size=self.args.training.batch_size, shuffle=False)
-        self.valid_loader = get_infinite_loader(self.valid_loader)
-
-        self._setup_proj_fn()
-        self._setup_info_metric_fns()
-        self._setup_loss_fns()
-
-        CHECKPOINT_DIR = "feature_selection_"+self.args.training.checkpoint_dir
-        # Add date and time to checkpoint directory
+    def fit(self, train_loader, test_loader=None):
+        CHECKPOINT_DIR = self.args.training.checkpoint_dir
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         CHECKPOINT_DIR = os.path.join(CHECKPOINT_DIR, timestamp)
-
-        logger=pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
-
-        self.trainer = pl.Trainer(logger=logger,
+        
+        # Create logger more safely to prevent weak reference errors
+        try:
+            # Try to create logger directly
+            logger = pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
+        except Exception as e:
+            print(f"Warning: Could not create TensorBoardLogger: {e}")
+            # Fallback to using CSV logger which is more reliable
+            logger = pl.loggers.CSVLogger(save_dir=CHECKPOINT_DIR)
+        
+        self.trainer = pl.Trainer(
+            logger=logger,
             default_root_dir=CHECKPOINT_DIR,
             accelerator=self.args.training.accelerator,
             devices=self.args.training.devices,
             max_steps=self.args.training.max_steps,
             max_epochs=None,
-            check_val_every_n_epoch=10,
+            check_val_every_n_epoch=None,
+            val_check_interval=self.args.training.val_check_interval,
             gradient_clip_val=self.args.optim.gradient_clip_val,
             accumulate_grad_batches=self.args.training.accum,
-            limit_val_batches=self.args.mc_estimates,)
-        
-        self.fit(self.train_loader, self.valid_loader)
-
-        ret_dict = {}
-
-        if self.mutinfo_estimate is not None:
-            ret_dict["mi"] = self.mutinfo_estimate
-        if self.entropy_estimate is not None:
-            ret_dict["entropy"] = self.entropy_estimate
-        if self.oinfo_estimate is not None:
-            ret_dict["oinfo"] = self.oinfo_estimate
-        
-        ret_dict["noise"] = self.noise.noise.detach().cpu().numpy()
-
-        return ret_dict
-    
-    def fit(self, train_loader, test_loader=None):
-    # Check if trainer exists or is invalid
-        if not hasattr(self, 'trainer') or self.trainer is None:
-            # Recreate the trainer with the same configuration as in __init__
-            CHECKPOINT_DIR = self.args.training.checkpoint_dir
-            timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            CHECKPOINT_DIR = os.path.join(CHECKPOINT_DIR, timestamp)
-            
-            # Create logger more safely to prevent weak reference errors
-            try:
-                # Try to create logger directly
-                logger = pl.loggers.TensorBoardLogger(save_dir=CHECKPOINT_DIR)
-            except Exception as e:
-                print(f"Warning: Could not create TensorBoardLogger: {e}")
-                # Fallback to using CSV logger which is more reliable
-                logger = pl.loggers.CSVLogger(save_dir=CHECKPOINT_DIR)
-            
-            self.trainer = pl.Trainer(
-                logger=logger,
-                default_root_dir=CHECKPOINT_DIR,
-                accelerator=self.args.training.accelerator,
-                devices=self.args.training.devices,
-                max_steps=self.args.training.max_steps,
-                max_epochs=None,
-                check_val_every_n_epoch=None,
-                val_check_interval=self.args.training.val_check_interval,
-                gradient_clip_val=self.args.optim.gradient_clip_val,
-                accumulate_grad_batches=self.args.training.accum,
-                limit_val_batches=self.args.mc_estimates,
-            )
+            limit_val_batches=self.args.mc_estimates,
+        )
 
         if test_loader is None:
             test_loader = DataLoader(
@@ -325,13 +239,10 @@ class InfoSEDD(pl.LightningModule):
     def setup(self, stage=None):
 
         # Initialize weights with xavier uniform
-        if stage == "fit" and not self.args.feature_selection:
+        if stage == "fit":
             for p in self.score_model.parameters():
                 if p.dim() > 1:
                     torch.nn.init.kaiming_uniform_(p, a=math.sqrt(5))
-        elif self.args.feature_selection:
-            self.score_model.eval()
-
         
         sampling_eps = self.args.sampling.eps
         try:
@@ -476,7 +387,10 @@ class InfoSEDD(pl.LightningModule):
 
         if self.args.estimate_mutinfo:
             self.mutinfo_estimate = np.mean(self.mutinfo_step_estimates)
+            self.mutinfo_estimate_std = np.std(self.mutinfo_step_estimates)
             self.logger.experiment.add_scalar("val_mutinfo", self.mutinfo_estimate, self.global_step)
+            self.logger.experiment.add_scalar("val_mutinfo_std", self.mutinfo_estimate_std, self.global_step)
+            self.log("val_mutinfo_std", self.mutinfo_estimate_std, on_step=False, on_epoch=True, prog_bar=True, logger=True)
             self.log("val_mutinfo", self.mutinfo_estimate, on_step=False, on_epoch=True, prog_bar=True, logger=True)
             print(f"Mutual information estimate: {self.mutinfo_estimate}")
         if self.args.estimate_oinfo:

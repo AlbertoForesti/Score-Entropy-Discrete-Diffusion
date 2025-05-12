@@ -289,9 +289,6 @@ def get_mutinfo_step_fn(config, graph, noise, proj_fn = lambda x, is_score: x):
             # raise UserWarning(f"t is {t}, sigma is {sigma}, batch shape is {batch.shape}")
             perturbed_batch = graph.sample_transition(batch, sigma)
 
-            if config.feature_selection:
-                sigma, dsigma = noise.base_noise(t)
-
             perturbed_batch = proj_fn(perturbed_batch, is_score=False)
 
             if config.variant == "j":
