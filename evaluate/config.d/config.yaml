@@ -14,7 +14,7 @@ hydra:
   mode: MULTIRUN
   sweep:
     dir: outputs/${now:%Y-%m-%d}
-    subdir: ${estimator._target_}/${estimator.args.variant}/${distribution._target_}/${distribution_key}/N=${n_samples}/n_runs=${n_runs}/target_mutinfo=${distribution.mutual_information}/${now:%Y-%m-%d_%H-%M-%S}_${hydra.job.num}
+    subdir: ${estimator._target_}/${estimator.args.variant}/${estimator.args.loss_fn}/${distribution._target_}/${distribution_key}/N=${n_samples}/n_runs=${n_runs}/target_mutinfo=${distribution.mutual_information}/${now:%Y-%m-%d_%H-%M-%S}_${hydra.job.num}
   sweeper:
     max_batch_size: 100 # Makes startup faster, see https://github.com/facebookresearch/hydra/issues/1324.
     params:

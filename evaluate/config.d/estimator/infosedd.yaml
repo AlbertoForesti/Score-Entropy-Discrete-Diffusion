@@ -2,18 +2,18 @@
 
 defaults:
 - _self_
-- model: unetmlp_7k
+- model: unetmlp
 
 estimator:
   _target_: infosedd.infosedd.InfoSEDD
   args:
     model: ${model}
     ngpus: 1
-    mc_estimates: 100
+    mc_estimates: 10
     estimate_entropy: False
     estimate_mutinfo: True
     estimate_oinfo: False
-    mc_times: 100
+    mc_times: 10
     sampling_eps: 1e-2
     montecarlo: False
     dynkin: True
@@ -41,7 +41,7 @@ estimator:
       checkpoint_dir: "infosedd/checkpoints_ema_mutinfo"
       accelerator: "gpu"
       devices: [2]
-      max_steps: 100001
+      max_steps: 10001
       val_check_interval: 5000
       p_marginal: 0.5
 
@@ -69,9 +69,12 @@ estimator:
     optim:
       weight_decay: 0
       optimizer: AdamW
-      lr: 1e-2
+      lr: 1e-3
       beta1: 0.9
       beta2: 0.999
       eps: 1e-8
-      warmup: 1_000
+      warmup: 0
       gradient_clip_val: 1.0
+    
+    loss_fn:
+      name: infosedd
