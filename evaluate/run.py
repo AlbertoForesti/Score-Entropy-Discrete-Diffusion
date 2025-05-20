@@ -11,6 +11,8 @@ from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
 from tqdm import trange
 
+from infosedd.infosedd import InfoSEDD
+
 import yaml
 
 import torch
@@ -73,7 +75,10 @@ def run_test(config : DictConfig) -> None:
 
         results["mutual_information"]["values"] = values
         results["mutual_information"]["mean"]   = mean
-        results["mutual_information"]["std"]    = std
+        if isinstance(estimator, InfoSEDD):
+            results["mutual_information"]["std"]    = estimator.mutinfo_estimate_std
+        else:
+            results["mutual_information"]["std"]    = std
 
         path = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
         with open(path / "setup.yaml", 'w') as file:
